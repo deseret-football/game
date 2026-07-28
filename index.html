@@ -8,10 +8,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root{
-    --night:#161228; --night2:#1e1838; --panel:#241d44; --panel2:#2b2350;
-    --honey:#e0a93a; --honey2:#f2c94c; --parch:#ece3cf; --muted:#9a8fbf;
-    --line:#382c60; --cel:#e8b53a; --ter:#c9cdd6; --tel:#c17f3e;
-    --win:#5fd08a; --draw:#cbb96e; --loss:#df7c9a;
+    --night:#0d1531; --night2:#122048; --panel:#16295c; --panel2:#1d3570;
+    --honey:#edbb00; --honey2:#ffd94d; --parch:#f3eedd; --muted:#93a7d6;
+    --line:#2a4383; --grana:#a50044; --cel:#ffd94d; --ter:#c9cdd6; --tel:#d08a4a;
+    --win:#5fd08a; --draw:#d9c25e; --loss:#ff6d94;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;padding:0;background:var(--night);color:var(--parch);
@@ -36,7 +36,7 @@
   .stat{flex:1;text-align:center}
   .divider{height:1px;background:var(--line);margin:12px 0}
   button{font-family:inherit;cursor:pointer;border:none;border-radius:8px;font-size:13px}
-  .btn{background:linear-gradient(180deg,var(--honey2),var(--honey));color:#2a1e05;
+  .btn{background:linear-gradient(180deg,var(--honey2),var(--honey));color:#241a00;
     font-weight:800;padding:12px 16px;width:100%;letter-spacing:.02em}
   .btn:active{transform:translateY(1px)}
   .btn.sec{background:var(--panel2);color:var(--parch);border:1px solid var(--line);font-weight:600}
@@ -49,7 +49,7 @@
     text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--line)}
   th.l,td.l{text-align:left}
   td{padding:7px 4px;text-align:right;border-bottom:1px solid rgba(56,44,96,.4)}
-  tr.me td{background:rgba(224,169,58,.12);font-weight:700}
+  tr.me td{background:rgba(165,0,68,.30);font-weight:700}
   tr.promo td:first-child{box-shadow:inset 3px 0 0 var(--win)}
   tr.releg td:first-child{box-shadow:inset 3px 0 0 var(--loss)}
   .pos{display:inline-block;width:34px;text-align:center;border-radius:4px;font-size:10px;
@@ -58,7 +58,7 @@
   .MID{background:#2e4a33;color:#a7e0b4}.FWD{background:#4d2b3a;color:#f0a9c4}
   .tierbadge{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700}
   .tier0{color:var(--cel)}.tier1{color:var(--ter)}.tier2{color:var(--tel)}
-  .ret{color:var(--loss);font-weight:800;font-size:10px;margin-left:3px}
+  .ret{color:#ff8fb3;font-weight:800;font-size:10px;margin-left:3px}
   .injtag{color:var(--loss);font-size:10px;font-weight:700}
   nav{position:fixed;bottom:0;left:0;right:0;max-width:520px;margin:0 auto;
     background:var(--night2);border-top:1px solid var(--line);display:flex;height:66px;z-index:6}
@@ -72,7 +72,7 @@
     border:1px solid var(--line);border-radius:8px;margin-bottom:7px;background:var(--panel);cursor:pointer}
   .teampick:active{background:var(--panel2)}
   .badge-lg{display:inline-block;padding:3px 9px;border-radius:5px;font-size:10px;font-weight:700;
-    letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line)}
+    letter-spacing:.08em;text-transform:uppercase;background:var(--grana);color:#fff;border:1px solid transparent}
   .grp-h{font-weight:800;font-size:14px;margin:16px 0 9px;display:flex;align-items:center;gap:8px}
   .slider-row{margin:12px 0}
   .slider-row input{width:100%}
@@ -128,8 +128,8 @@ const CLUBS=[
 "Ammonihah City","Mulek United","Antionum FC","Far West Athletic","Harmony Rovers",
 "Fayette Town","Sidon Wanderers","Helam City","Middoni United","Onidah FC",
 "Shilom Athletic","Jashon Rovers","Minon Town","Noah Wanderers","Boaz City",
-"Nephihah United","Antiparah FC","Judea Athletic","Cumeni Rovers","Shemlon Town",
-"Amulon Wanderers","Ishmael City","Midian United","Angola FC","Sidom Athletic",
+"Nephihah United","Caminini Bikini","Angry Bippi","Fluffy Tippi FC","Shemlon Town",
+"Amulon Wanderers","Ishmael City","Sam Hayes United","FC Beck","Lowen Athletic",
 "Carthage Rovers","Adam-ondi FC","Cove Fort Town","Parowan Wanderers","Kanab City"];
 
 const TIERS=[
@@ -270,7 +270,10 @@ function saveGame(silent){
 function loadGame(){
  try{const raw=localStorage.getItem(SAVE_KEY);if(!raw)return false;
    const g=JSON.parse(raw);if(!g||g.ver!==2)return false;
-   G=g;rebuildIndex();return true;}
+   G=g;rebuildIndex();
+   // club names always come from the code, so renames apply to existing saves
+   G.teams.forEach(t=>{t.name=CLUBS[t.id]});
+   return true;}
  catch(e){return false;}
 }
 function wipeSave(){try{localStorage.removeItem(SAVE_KEY)}catch(e){}}
@@ -572,11 +575,11 @@ function stars(n){return `<span class="stars">${"\u2605".repeat(n)}${"\u2606".re
 function ageCell(p){return p.age>=40?`${p.age}<span class="ret">R</span>`:p.age;}
 
 function crestSVG(){return `<svg class="crest" viewBox="0 0 48 48" fill="none">
- <g stroke="#e0a93a" stroke-width="2" fill="none">
+ <g stroke="#edbb00" stroke-width="2" fill="none">
    <ellipse cx="24" cy="15" rx="6" ry="3.4"/><ellipse cx="24" cy="21" rx="9" ry="4"/>
    <ellipse cx="24" cy="28" rx="11" ry="4.4"/><ellipse cx="24" cy="35.5" rx="12.5" ry="4.6"/></g>
- <circle cx="24" cy="9" r="2" fill="#f2c94c"/>
- <path d="M20 40 q4 3 8 0" stroke="#e0a93a" stroke-width="2" fill="none"/></svg>`;}
+ <circle cx="24" cy="9" r="2" fill="#a50044"/>
+ <path d="M20 40 q4 3 8 0" stroke="#edbb00" stroke-width="2" fill="none"/></svg>`;}
 
 function render(){
  if(!G||G.userTeam===null){renderStart();return;}
@@ -609,7 +612,6 @@ function renderStart(){
  const s=$(`<div class="start"></div>`);
  s.appendChild($(`<div class="center" style="margin-bottom:6px">${crestSVG()}</div>`));
  s.appendChild($(`<h1 class="center" style="font-size:26px;color:var(--honey)">Deseret Football</h1>`));
- s.appendChild($(`<p class="center muted small" style="margin:6px 0 14px">Guide a club through the three degrees of glory.<br>Develop the young, trade the willing, chase ${CUP}.</p>`));
 
  if(localStorage.getItem(SAVE_KEY)&&(!G||G.userTeam===null)){
    const cont=$(`<button class="btn" style="margin-bottom:10px">Continue saved game</button>`);
@@ -727,8 +729,7 @@ function viewSquad(w){
  ensureXI();
  const fc=$(`<div class="card"></div>`);
  fc.appendChild($(`<div class="lbl">Formation</div>`));
- const fsel=$(`<select style="margin-top:6px"></select>`);
- Object.keys(FORMATIONS).forEach(f=>fsel.appendChild($(`<option ${f===G.formation?'selected':''}>${f}</option>`)));
+ const fsel=$(`<select style="margin-top:6px">${Object.keys(FORMATIONS).map(f=>`<option ${f===G.formation?'selected':''}>${f}</option>`).join("")}</select>`);
  fsel.onchange=()=>{G.formation=fsel.value;G.xi=autoXI(userTeamObj(),G.formation).map(p=>p.id);render()};
  fc.appendChild(fsel);
  [["mentality","Defensive","Attacking"],["pressing","Low block","High press"]].forEach(([k,lo,hi])=>{
@@ -753,8 +754,7 @@ function viewSquad(w){
    const curP=P(cur);
    if(curP&&curP.inj>0&&!opts.find(p=>p.id===cur))opts.unshift(curP);
    const row=$(`<div class="row" style="margin:6px 0"><span class="pos ${pos}">${pos}</span></div>`);
-   const sel=$(`<select style="flex:1;margin-left:8px"></select>`);
-   opts.forEach(p=>sel.appendChild($(`<option value="${p.id}" ${p.id===cur?'selected':''}>${p.name} \u00B7 ${p.ovr} \u00B7 ${p.age}y${p.inj>0?" \u00B7 INJ":""}</option>`)));
+   const sel=$(`<select style="flex:1;margin-left:8px">${opts.map(p=>`<option value="${p.id}" ${p.id===cur?'selected':''}>${p.name} \u00B7 ${p.ovr} \u00B7 ${p.age}y${p.inj>0?" \u00B7 INJ":""}</option>`).join("")}</select>`);
    sel.onchange=()=>{G.xi[idx]=+sel.value;render()};
    row.appendChild(sel);xc.appendChild(row);
  });
@@ -762,18 +762,12 @@ function viewSquad(w){
 
  const sc=$(`<div class="card"></div>`);
  sc.appendChild($(`<h3 style="font-size:15px;margin-bottom:8px">Full squad (${userTeamObj().squad.length})</h3>`));
- const t=$(`<table><thead><tr>
-   <th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th>Fit</th></tr></thead><tbody></tbody></table>`);
- const tb=t.querySelector("tbody");
- squadOf(userTeamObj()).sort((a,b)=>b.ovr-a.ovr).forEach(p=>{
-   tb.appendChild($(`<tr>
-     <td class="l">${p.name}</td>
-     <td class="l"><span class="pos ${p.pos}">${p.pos}</span></td>
-     <td>${ageCell(p)}</td><td class="gold">${p.ovr}</td>
-     <td class="muted">${p.pot}</td>
-     <td>${p.inj>0?`<span class="injtag">INJ ${p.inj}</span>`:"\u2713"}</td></tr>`));
- });
- sc.appendChild(t);
+ const rows=squadOf(userTeamObj()).sort((a,b)=>b.ovr-a.ovr).map(p=>
+   `<tr><td class="l">${p.name}</td><td class="l"><span class="pos ${p.pos}">${p.pos}</span></td>`+
+   `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td class="muted">${p.pot}</td>`+
+   `<td>${p.inj>0?`<span class="injtag">INJ ${p.inj}</span>`:"\u2713"}</td></tr>`).join("");
+ sc.appendChild($(`<table><thead><tr>
+   <th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th>Fit</th></tr></thead><tbody>${rows}</tbody></table>`));
  sc.appendChild($(`<div class="small muted" style="margin-top:8px"><span class="ret">R</span> = final season. Players retire at the end of their age-40 year and are replaced in the world by a new 16-year-old.</div>`));
  w.appendChild(sc);
 }
@@ -800,21 +794,18 @@ function viewLeague(w){
 }
 function leagueTable(tier,mark){
  const tbl=standingsOf(tier);
- const t=$(`<div class="card" style="padding:8px 10px"><table><thead><tr>
-   <th class="l">#</th><th class="l">Club</th><th>P</th><th>W</th><th>D</th><th>L</th>
-   <th>GD</th><th>Pts</th></tr></thead><tbody></tbody></table></div>`);
- const tb=t.querySelector("tbody");
- tbl.forEach((tm,i)=>{
+ const rows=tbl.map((tm,i)=>{
    const gd=tm.st.GF-tm.st.GA;
    let cls=tm.id===G.userTeam&&mark?"me ":"";
    if(tier<2&&i<3)cls+="promo";else if(tier>0&&i>=12)cls+="releg";
-   tb.appendChild($(`<tr class="${cls}">
-     <td class="l muted">${i+1}</td><td class="l">${tm.name}</td>
-     <td>${tm.st.P}</td><td>${tm.st.W}</td><td>${tm.st.D}</td><td>${tm.st.L}</td>
-     <td class="${gd>0?'res-w':gd<0?'res-l':''}">${gd>0?'+':''}${gd}</td>
-     <td class="gold"><b>${tm.st.Pts}</b></td></tr>`));
- });
- return t;
+   return `<tr class="${cls}"><td class="l muted">${i+1}</td><td class="l">${tm.name}</td>`+
+     `<td>${tm.st.P}</td><td>${tm.st.W}</td><td>${tm.st.D}</td><td>${tm.st.L}</td>`+
+     `<td class="${gd>0?'res-w':gd<0?'res-l':''}">${gd>0?'+':''}${gd}</td>`+
+     `<td class="gold"><b>${tm.st.Pts}</b></td></tr>`;
+ }).join("");
+ return $(`<div class="card" style="padding:8px 10px"><table><thead><tr>
+   <th class="l">Pos</th><th class="l">Club</th><th>P</th><th>W</th><th>D</th><th>L</th>
+   <th>GD</th><th>Pts</th></tr></thead><tbody>${rows}</tbody></table></div>`);
 }
 
 /* ---------- TRANSFERS ---------- */
@@ -828,39 +819,33 @@ function viewTransfers(w){
  const sc=$(`<div class="card"></div>`);
  sc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Sell from your squad</h3>
    <div class="small muted" style="margin-bottom:8px">Sales bring 90% of value. Keep 16+ players and 2+ keepers. <span class="ret">R</span> players retire at year's end — sell now or lose the fee.</div>`));
- const stab=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>Value</th><th></th></tr></thead><tbody></tbody></table>`);
- squadOf(t).sort((a,b)=>b.value-a.value).forEach(p=>{
-   const row=$(`<tr><td class="l">${p.name}</td><td><span class="pos ${p.pos}">${p.pos}</span></td>
-     <td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td>${money(p.value)}</td><td></td></tr>`);
-   const b=$(`<button class="btn sm sec">Sell</button>`);
-   b.onclick=()=>sellPlayer(p);row.lastElementChild.appendChild(b);
-   stab.querySelector("tbody").appendChild(row);
- });
+ const sellRows=squadOf(t).sort((a,b)=>b.value-a.value).map(p=>
+   `<tr><td class="l">${p.name}</td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
+   `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td>${money(p.value)}</td>`+
+   `<td><button class="btn sm sec" data-sell="${p.id}">Sell</button></td></tr>`).join("");
+ const stab=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>Value</th><th></th></tr></thead><tbody>${sellRows}</tbody></table>`);
+ stab.querySelectorAll("[data-sell]").forEach(b=>b.onclick=()=>sellPlayer(P(+b.dataset.sell)));
  sc.appendChild(stab);w.appendChild(sc);
 
  const hasScout=myStars("scout")>0;
  const mc=$(`<div class="card"></div>`);
  mc.appendChild($(`<div class="row" style="margin-bottom:6px"><h3 style="font-size:15px">Free agents (${G.freeAgents.length})</h3></div>`));
  if(!hasScout)mc.appendChild($(`<div class="small muted" style="margin-bottom:6px">Hire a Scout in the Office to reveal potential (POT).</div>`));
- const sortSel=$(`<select style="margin-bottom:8px"></select>`);
- [["ovr","Rating"],["pot","Potential"],["value","Value (low\u2192high)"],["age","Age (young\u2192old)"]]
-   .forEach(([k,l])=>sortSel.appendChild($(`<option value="${k}" ${k===MKT_SORT?'selected':''}>${l}</option>`)));
+ const sortSel=$(`<select style="margin-bottom:8px">${[["ovr","Rating"],["pot","Potential"],["value","Value (low\u2192high)"],["age","Age (young\u2192old)"]]
+   .map(([k,l])=>`<option value="${k}" ${k===MKT_SORT?'selected':''}>${l}</option>`).join("")}</select>`);
  sortSel.onchange=()=>{MKT_SORT=sortSel.value;render()};
  mc.appendChild(sortSel);
  let fa=G.freeAgents.map(P);
  fa.sort((a,b)=> MKT_SORT==="value"?a.value-b.value : MKT_SORT==="age"?a.age-b.age : b[MKT_SORT]-a[MKT_SORT]);
  fa=fa.slice(0,40);
- const ftab=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th>Fee</th><th></th></tr></thead><tbody></tbody></table>`);
- fa.forEach(p=>{
-   const row=$(`<tr><td class="l">${p.name}</td><td><span class="pos ${p.pos}">${p.pos}</span></td>
-     <td>${ageCell(p)}</td><td class="gold">${p.ovr}</td>
-     <td class="muted">${hasScout?p.pot:"?"}</td>
-     <td>${money(p.value)}</td><td></td></tr>`);
-   const b=$(`<button class="btn sm ${t.budget>=p.value?'':'sec'}">Sign</button>`);
-   b.disabled=t.budget<p.value||t.squad.length>=30;
-   b.onclick=()=>signPlayer(p);row.lastElementChild.appendChild(b);
-   ftab.querySelector("tbody").appendChild(row);
- });
+ const faRows=fa.map(p=>{
+   const can=t.budget>=p.value&&t.squad.length<30;
+   return `<tr><td class="l">${p.name}</td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
+   `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td class="muted">${hasScout?p.pot:"?"}</td>`+
+   `<td>${money(p.value)}</td><td><button class="btn sm ${can?'':'sec'}" data-sign="${p.id}" ${can?'':'disabled'}>Sign</button></td></tr>`;
+ }).join("");
+ const ftab=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th>Fee</th><th></th></tr></thead><tbody>${faRows}</tbody></table>`);
+ ftab.querySelectorAll("[data-sign]").forEach(b=>b.onclick=()=>signPlayer(P(+b.dataset.sign)));
  mc.appendChild(ftab);w.appendChild(mc);
 }
 function signPlayer(p){
