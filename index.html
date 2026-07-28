@@ -314,6 +314,12 @@ function loadGame(){
    if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
    if(!G.window)G.window={day:4,offersMade:0};
    if(!G.offers)G.offers=[];
+   if(G.userTeam!==null&&!G.teams.find(t=>t.id===G.userTeam)){
+     // orphaned save recovery: rejoin the lowest-rated Telestial club
+     const tel=G.teams.filter(t=>t.tier===2).sort((a,b)=>
+       squadOf(a).reduce((s,p)=>s+p.ovr,0)-squadOf(b).reduce((s,p)=>s+p.ovr,0));
+     G.userTeam=tel.length?tel[0].id:G.teams[0].id;
+   }
    if(!G.cup||!G.cup.phase){        // migrate old cup format: rebuild and replay quietly
      QUIET=true;initCup();
      ALL_CUP_MARKS.forEach(mk=>{if(mk<=G.matchday)playCupRound()});
@@ -421,6 +427,7 @@ function playMatchday(){
  // a player who sat out this match has now served the ban
  G.players.forEach(p=>{if(p.susp>0)p.susp--});
  financeTick(userHome===true);
+ aiFinanceTick();
  maybeInjury();
  maybeEvent();
  aiTransfers();
@@ -455,6 +462,22 @@ function financeTick(home){
  t.budget+=net;
  if(wasOk&&t.budget<0)logAdd("The board warns: the club is in the red. Sell players or trim wages.");
  G.finance={home,att,gate,spon,merch,pw,sw,net};
+}
+
+/* ---- light AI weekly economy: keeps rival budgets realistic year-round ---- */
+function aiFinanceTick(){
+ G.teams.forEach(t=>{
+   if(t.id===G.userTeam)return;
+   const rep=repOf(t);
+   const income=Math.round([70000,32000,15000][t.tier]*(1+rep));
+   const wages=squadWage(t);
+   t.budget+=income-wages;
+   if(t.budget<0&&t.squad.length>16){
+     const p=squadOf(t).sort((a,b)=>b.value-a.value)[0];
+     t.budget+=Math.round(p.value*.9);
+     t.squad=t.squad.filter(x=>x!==p.id);p.team=null;G.freeAgents.push(p.id);
+   }
+ });
 }
 
 /* ---- injuries ---- */
@@ -671,15 +694,25 @@ function endSeason(){
  tables[1].slice(0,3).forEach(t=>{t.tier=0;promoted.add(t.id);t.budget+=3e6});
  tables[1].slice(12).forEach(t=>{t.tier=2;relegated.add(t.id)});
  tables[2].slice(0,3).forEach(t=>{t.tier=1;promoted.add(t.id);t.budget+=1.5e6});
- // Telestial bottom 3 leave the pyramid; 3 clubs from the expansion pool take their place
- const dropped=tables[2].slice(12);
+ // Telestial bottom 3 leave the pyramid; 3 clubs from the expansion pool take their place.
+ // The user's club is never expelled — if it finishes in the drop zone, the next
+ // non-user club above the line folds instead, so the career always continues.
+ const telTable=tables[2];
+ let dropSet=telTable.slice(12);
+ if(dropSet.some(t=>t.id===G.userTeam)){
+   dropSet=dropSet.filter(t=>t.id!==G.userTeam);
+   for(let i=11;i>=0&&dropSet.length<3;i--){
+     if(telTable[i].id!==G.userTeam)dropSet.push(telTable[i]);
+   }
+   G.userSurvived=true;   // flag a lucky escape for a toast
+ }
+ const dropped=dropSet;
  dropped.forEach(t=>{
    G.teams=G.teams.filter(x=>x.id!==t.id);
    G.expansion.push({id:t.id,name:t.name,inPool:true,
      leagueTitles:t.leagueTitles,cupTitles:t.cupTitles});
    // release its players to the free market
    t.squad.forEach(pid=>{const p=P(pid);if(p){p.team=null;G.freeAgents.push(pid)}});
-   if(t.id===G.userTeam)G.userRelegatedOut=true;
  });
  rebuildTeamIndex();  // dropped clubs removed
  const incoming=shuffle(G.expansion.filter(e=>e.inPool)).slice(0,3);
@@ -696,7 +729,8 @@ function endSeason(){
 
  rebuildTeamIndex();
  const boot=G.players.slice().sort((a,b)=>(b.gs||0)-(a.gs||0))[0];
- if(boot&&boot.team===G.userTeam){logAdd(`${boot.name} won the Golden Boot with ${boot.gs} goals!`);}
+ if(boot&&boot.gs>0){const club=boot.team!==null&&T(boot.team)?T(boot.team).name:"a free agent";
+   logAdd(`Golden Boot: ${boot.name} (${club}) with ${boot.gs} goals.`);}
  G.history.push({season:G.season,tier:_playedTier,rank:_myRank,boot:boot?`${boot.name} (${boot.gs})`:"?",
    champ:tables[0][0].name,
    cup:G.cup&&G.cup.winner!==null?T(G.cup.winner).name:"—",
@@ -723,7 +757,18 @@ function stockClub(t){
      const p=avail.shift();p.team=t.id;t.squad.push(p.id);
      G.freeAgents=G.freeAgents.filter(x=>x!==p.id);need--;
    }
-   while(need>0){const p=newPlayer(G.nextPid++,pos,ri(18,30));p.team=t.id;t.squad.push(p.id);G.players.push(p);need--;}
+   while(need>0){
+     // reuse an unused free agent of any position before minting a new body,
+     // so the global pool stays at ~1000
+     const spare=G.freeAgents.map(P)[0];
+     if(spare&&G.players.length>=1000){
+       spare.pos=pos;makeAttrs(spare);spare.value=valueOf(spare);spare.wage=wageOf(spare);
+       spare.team=t.id;t.squad.push(spare.id);G.freeAgents=G.freeAgents.filter(x=>x!==spare.id);
+     }else{
+       const p=newPlayer(G.nextPid++,pos,ri(18,30));p.team=t.id;t.squad.push(p.id);G.players.push(p);
+     }
+     need--;
+   }
  }
  rebuildIndex();
 }
@@ -767,7 +812,7 @@ function ensureXI(){
 }
 function userStartXI(){
  ensureXI();
- let xi=G.xi.map(P).filter(p=>p&&p.inj<=0);
+ let xi=G.xi.map(P).filter(p=>p&&p.inj<=0&&(p.susp||0)<=0);
  if(xi.length<11){const used=new Set(xi.map(p=>p.id));
    fit(squadOf(userTeamObj())).filter(p=>!used.has(p.id)).sort((a,b)=>b.ovr-a.ovr)
      .forEach(p=>{if(xi.length<11)xi.push(p)});}
@@ -793,7 +838,16 @@ function buyScout(teamId){
  logAdd(`Scouted ${T(teamId).name} for the season.`,-cost);
  saveGame(true);render();
 }
-function transferFee(p){return p.ovr*XFER_PER_OVR;}
+function transferFee(p){
+ // Headline is OVR x £1M, but the fee shifts with age and potential so a
+ // young, high-ceiling player costs well above an aging one at the same OVR.
+ const base=p.ovr*XFER_PER_OVR;
+ let mult=1;
+ if(p.age<=21)mult=1.30; else if(p.age<=25)mult=1.12; else if(p.age<=29)mult=1.0;
+ else if(p.age<=32)mult=0.78; else if(p.age<=35)mult=0.55; else mult=0.38;
+ if(p.pot-p.ovr>=10&&p.age<24)mult*=1.15;      // wonderkid premium
+ return Math.max(500000,Math.round(base*mult/100000)*100000);
+}
 function buyPlayer(p){
  const t=userTeamObj();
  if(!inWindow())return toast("Trades only happen in the pre-season window.");
@@ -1064,6 +1118,7 @@ function viewClub(w){
      const h=G.history[G.history.length-1];
      let m=`Finished ${ordinal(h.rank)} in the ${TIERS[before].name}.`;
      if(h.promo)m+=" Promoted \u2600";if(h.releg)m+=" Relegated \u2193";
+     if(G.userSurvived){m+=" \u2014 you dodged expulsion as a rival folded!";G.userSurvived=false;}
      toast(m);render()};
    w.appendChild(b);
  }
