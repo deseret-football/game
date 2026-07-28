@@ -309,7 +309,7 @@ function autoXI(team,formation,useAll){
 function strength(xi){
  let atk=0,def=0,wa=0,wd=0;
  xi.forEach(p=>{atk+=p.ovr*ATKW[p.pos];wa+=ATKW[p.pos];def+=p.ovr*DEFW[p.pos];wd+=DEFW[p.pos]});
- return{atk:atk/wa,def:def/wd};
+ return{atk:atk/(wa||1),def:def/(wd||1)};
 }
 function poisson(l){let L=Math.exp(-l),k=0,p=1;do{k++;p*=Math.random()}while(p>L);return k-1;}
 const NEU={mentality:50,pressing:50};
@@ -389,7 +389,9 @@ function financeTick(home){
  const spon=sponsorWeekly(t),merch=merchWeekly(t);
  const pw=squadWage(t),sw=staffWage();
  const net=gate+spon+merch-pw-sw;
+ const wasOk=t.budget>=0;
  t.budget+=net;
+ if(wasOk&&t.budget<0)logAdd("The board warns: the club is in the red. Sell players or trim wages.");
  G.finance={home,att,gate,spon,merch,pw,sw,net};
 }
 
@@ -581,17 +583,26 @@ function endSeason(){
  tables.forEach((tbl,tier)=>tbl.forEach((t,r)=>{
    const tv=base[tier]+(15-r)*200000;
    if(t.id===G.userTeam){t.budget+=tv;logAdd("Season TV and prize money received.",tv);}
-   else t.budget+=tv-squadWage(t)*30;
+   else t.budget+=tv-squadWage(t)*28;
  }));
+ // insolvent AI clubs must sell until back above zero (16-player floor)
+ G.teams.forEach(t=>{
+   if(t.id===G.userTeam)return;
+   while(t.budget<0&&t.squad.length>16){
+     const p=squadOf(t).sort((a,b)=>b.value-a.value)[0];
+     t.budget+=Math.round(p.value*.9);
+     t.squad=t.squad.filter(x=>x!==p.id);p.team=null;G.freeAgents.push(p.id);
+   }
+ });
  tables[0].slice(12).forEach(t=>{t.tier=1;relegated.add(t.id)});
  tables[1].slice(0,3).forEach(t=>{t.tier=0;promoted.add(t.id);t.budget+=3e6});
  tables[1].slice(12).forEach(t=>{t.tier=2;relegated.add(t.id)});
  tables[2].slice(0,3).forEach(t=>{t.tier=1;promoted.add(t.id);t.budget+=1.5e6});
 
  const ut=T(G.userTeam);
- const myTable=tables[[0,1,2].find(x=>G.tierTeams[x].includes(G.userTeam))];
- const myRank=myTable.indexOf(ut)+1;
- G.history.push({season:G.season,tier:ut.tier,rank:myRank,
+ const playedTier=[0,1,2].find(x=>G.tierTeams[x].includes(G.userTeam));
+ const myRank=tables[playedTier].indexOf(ut)+1;
+ G.history.push({season:G.season,tier:playedTier,rank:myRank,
    champ:tables[0][0].name,
    cup:G.cup&&G.cup.winner!==null?T(G.cup.winner).name:"—",
    promo:promoted.has(G.userTeam),releg:relegated.has(G.userTeam)});
@@ -600,6 +611,10 @@ function endSeason(){
  G.teams.forEach(t=>t.st=blankStd());
  rebuildTierTeams();
  G.matchday=0;G.season++;G.lastResults=null;G.xi=null;G.results=[];
+ for(const role in STAFF_ROLES){
+   if(G.staffPool.filter(s=>s.role===role).length<3&&G.staffPool.length<48)
+     G.staffPool.push(newStaff(G.nextPid+++100000,role));
+ }
  initCup();
  saveGame(true);
 }
@@ -722,7 +737,7 @@ function renderStart(){
        <div class="small muted">Squad ${ovr} \u00B7 ${money(t.budget)} \u00B7 ${(t.capacity/1000).toFixed(0)}k seats</div></div>
        <span class="badge-lg ${TIERS[tier].cls}">Pick</span></div>`);
      row.onclick=()=>{
-       G.owner=(nameIn.value.trim()||"President");
+       G.owner=(nameIn.value.trim().replace(/[<>&"]/g,"")||"President").slice(0,24);
        G.userTeam=id;cupScheduleUser();TAB="club";saveGame(true);render()};
      s.appendChild(row);
    });
@@ -751,7 +766,7 @@ function viewClub(w){
    <div class="divider"></div>
    <div class="row">
      <div class="stat"><div class="lbl">Squad</div><div class="big">${ovr}</div></div>
-     <div class="stat"><div class="lbl">Budget</div><div class="big">${money(t.budget)}</div></div>
+     <div class="stat"><div class="lbl">Budget</div><div class="big" style="${t.budget<0?'color:var(--loss)':''}">${money(t.budget)}</div></div>
      <div class="stat"><div class="lbl">Wages/wk</div><div class="big">${money(squadWage(t)+staffWage())}</div></div>
    </div></div>`));
 
@@ -786,8 +801,8 @@ function viewClub(w){
 
  if(G.matchday<30){
    const nx=upcomingFixture();
-   if(nx)w.appendChild($(`<div class="card row"><div class="lbl">Next fixture</div>
-     <div><b>${nx.home?"Home":"Away"}</b> vs ${nx.opp}</div></div>`));
+   w.appendChild($(`<div class="card row"><div class="lbl">Next fixture</div>
+     <div>${nx?`<b>${nx.home?"Home":"Away"}</b> vs ${nx.opp}`:`<span class="muted">League bye \u00B7 rest week</span>`}</div></div>`));
    const b=$(`<button class="btn">Play matchday ${G.matchday+1}</button>`);
    b.onclick=()=>{playMatchday();render()};
    w.appendChild(b);
@@ -886,6 +901,10 @@ function viewLeague(w){
  let html="";
  G.fixtures.forEach((rd,md)=>{
    const pair=rd.find(([i,j])=>i===li||j===li);
+   if(!pair){
+     html+=`<div class="fixt"><span class="muted" style="width:26px">${md+1}</span>
+       <span style="width:14px"></span><span style="flex:1" class="muted">League bye \u00B7 rest week</span></div>`;
+   }
    if(pair){
      const home=pair[0]===li;const opp=T(tt[home?pair[1]:pair[0]]);
      const res=G.results.find(r=>r.md===md);
@@ -958,7 +977,9 @@ function viewTransfers(w){
  const mc=$(`<div class="card"></div>`);
  mc.appendChild($(`<div class="row" style="margin-bottom:6px"><h3 style="font-size:15px">Free agents (${G.freeAgents.length})</h3></div>`));
  if(!hasScout)mc.appendChild($(`<div class="small muted" style="margin-bottom:6px">Hire a Scout in the Office to reveal potential (POT).</div>`));
- const sortSel=$(`<select style="margin-bottom:8px">${[["ovr","Rating"],["pot","Potential"],["value","Value (low\u2192high)"],["age","Age (young\u2192old)"]]
+ if(!hasScout&&MKT_SORT==="pot")MKT_SORT="ovr";
+ const sortOpts=[["ovr","Rating"],...(hasScout?[["pot","Potential"]]:[]),["value","Value (low\u2192high)"],["age","Age (young\u2192old)"]];
+ const sortSel=$(`<select style="margin-bottom:8px">${sortOpts
    .map(([k,l])=>`<option value="${k}" ${k===MKT_SORT?'selected':''}>${l}</option>`).join("")}</select>`);
  sortSel.onchange=()=>{MKT_SORT=sortSel.value;render()};
  mc.appendChild(sortSel);
