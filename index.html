@@ -310,6 +310,10 @@ function loadGame(){
    G.teams.forEach(t=>{t.name=CLUBS[t.id]});
    if(!G.results)G.results=[];
    G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0});
+   // never let a loaded save dead-end: if pre-season with no window, open one
+   if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
+   if(!G.window)G.window={day:4,offersMade:0};
+   if(!G.offers)G.offers=[];
    if(!G.cup||!G.cup.phase){        // migrate old cup format: rebuild and replay quietly
      QUIET=true;initCup();
      ALL_CUP_MARKS.forEach(mk=>{if(mk<=G.matchday)playCupRound()});
@@ -1036,12 +1040,16 @@ function viewClub(w){
  w.appendChild(trophyCard(t));
  w.appendChild(goalLeaderCard(squadOf(t),"Your club's top scorers (career)"));
 
+ // Clear priority: window first, then in-season play, then season-end advance.
  if(inWindow()){
    w.appendChild($(`<div class="card center" style="border-color:var(--honey)">
      <b class="gold">Transfer window \u00B7 Day ${G.window.day} of 3</b>
-     <div class="small muted" style="margin-top:4px">Buy and sell in the Market tab. Advance days there. The season starts after Day 3.</div></div>`));
- }
- if(G.matchday<30&&!inWindow()){
+     <div class="small muted" style="margin:4px 0 10px">Sign free agents, trade in the World tab, and review offers in the Market. When you are ready, move to the next day.</div></div>`));
+   const bm=$(`<button class="btn sec" style="margin-bottom:8px">Go to the transfer market</button>`);
+   bm.onclick=()=>{TAB="transfers";render()};w.appendChild(bm);
+   const bd=$(`<button class="btn">${G.window.day>=3?"Close window and start the season":"Advance to window Day "+(G.window.day+1)}</button>`);
+   bd.onclick=()=>advanceWindowDay();w.appendChild(bd);
+ }else if(G.matchday<30){
    const nx=upcomingFixture();
    w.appendChild($(`<div class="card row"><div class="lbl">Next fixture</div>
      <div>${nx?`<b>${nx.home?"Home":"Away"}</b> vs ${nx.opp}`:`<span class="muted">League bye \u00B7 rest week</span>`}</div></div>`));
@@ -1050,7 +1058,7 @@ function viewClub(w){
    w.appendChild(b);
  }else{
    w.appendChild($(`<div class="card center"><b class="gold">Season complete</b>
-     <div class="small muted" style="margin-top:4px">Promotion, relegation, ageing, retirements and new youth will be processed.</div></div>`));
+     <div class="small muted" style="margin-top:4px">Promotion, relegation, ageing, retirements and new youth will be processed, then a new transfer window opens.</div></div>`));
    const b=$(`<button class="btn">Advance to Season ${G.season+1}</button>`);
    b.onclick=()=>{const before=userTeamObj().tier;endSeason();
      const h=G.history[G.history.length-1];
