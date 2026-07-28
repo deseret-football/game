@@ -85,6 +85,16 @@
   .amt-p{color:var(--win)}.amt-n{color:var(--loss)}
   .logline{padding:7px 0;border-bottom:1px solid rgba(56,44,96,.4);font-size:12px;display:flex;gap:8px;justify-content:space-between}
   .stars{color:var(--honey);letter-spacing:1px;font-size:11px}
+  .pname{color:var(--honey2);text-decoration:underline;text-decoration-color:rgba(242,201,76,.35);cursor:pointer}
+  .overlay{position:fixed;inset:0;background:rgba(5,9,26,.72);z-index:30;display:flex;align-items:flex-end;justify-content:center}
+  @media(min-width:768px){.overlay{align-items:center}}
+  .pcard{background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 0 0;padding:18px;width:100%;max-width:440px;max-height:82vh;overflow:auto}
+  @media(min-width:768px){.pcard{border-radius:14px}}
+  .abar{height:8px;background:var(--night2);border-radius:4px;overflow:hidden;flex:1;margin:0 8px}
+  .abar>div{height:100%;background:linear-gradient(90deg,var(--grana),var(--honey))}
+  .arow{display:flex;align-items:center;font-size:11px;margin:6px 0}
+  .arow .al{width:74px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+  .arow .av{width:26px;text-align:right;font-weight:700}
   .toast{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);background:var(--panel2);
     border:1px solid var(--honey);color:var(--parch);padding:10px 16px;border-radius:8px;font-size:12px;z-index:20;max-width:90%}
 </style>
@@ -204,7 +214,8 @@ function myStars(role){const s=G.myStaff&&G.myStaff[role];return s?s.stars:0;}
 
 function newPlayer(id,pos,age){
  const p={id,name:pick(FIRST)+" "+pick(LAST),pos,age,
-   pot:48+Math.floor(Math.pow(Math.random(),1.6)*47),team:null,inj:0};
+   pot:48+Math.floor(Math.pow(Math.random(),1.6)*47),team:null,inj:0,
+   gs:0,gc:0,as:0,ac:0};
  makeAttrs(p);p.value=valueOf(p);p.wage=wageOf(p);return p;}
 
 function newStaff(id,role){
@@ -279,6 +290,7 @@ function loadGame(){
    // club names always come from the code, so renames apply to existing saves
    G.teams.forEach(t=>{t.name=CLUBS[t.id]});
    if(!G.results)G.results=[];
+   G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0});
    if(!G.cup||!G.cup.phase){        // migrate old cup format: rebuild and replay quietly
      QUIET=true;initCup();
      ALL_CUP_MARKS.forEach(mk=>{if(mk<=G.matchday)playCupRound()});
@@ -313,6 +325,24 @@ function strength(xi){
 }
 function poisson(l){let L=Math.exp(-l),k=0,p=1;do{k++;p*=Math.random()}while(p>L);return k-1;}
 const NEU={mentality:50,pressing:50};
+const SCORE_W={GK:.01,DEF:.25,MID:1,FWD:2.2};
+function attributeGoals(xi,n){
+ const scorers=[];
+ const w=xi.map(p=>SCORE_W[p.pos]*(p.shooting+p.technique*.4));
+ const tot=w.reduce((a,b)=>a+b,0);
+ for(let g=0;g<n;g++){
+   let r=Math.random()*tot;let k=0;
+   while(r>w[k]&&k<w.length-1){r-=w[k];k++}
+   const p=xi[k];p.gs=(p.gs||0)+1;p.gc=(p.gc||0)+1;scorers.push(p.name);
+ }
+ return scorers;
+}
+function playTie(h,a,adv){
+ const hXI=teamXI(h),aXI=teamXI(a);
+ const[hg,ag]=simMatch(hXI,aXI,teamTac(h),teamTac(a),teamBoost(h),teamBoost(a),adv);
+ [...hXI,...aXI].forEach(p=>{p.as=(p.as||0)+1;p.ac=(p.ac||0)+1});
+ return{hg,ag,hs:attributeGoals(hXI,hg),asc:attributeGoals(aXI,ag)};
+}
 function simMatch(hXI,aXI,hTac,aTac,hBoost,aBoost,homeAdv=3){
  const sH=strength(hXI),sA=strength(aXI);
  const mH=(hTac.mentality-50),mA=(aTac.mentality-50);
@@ -350,10 +380,11 @@ function playMatchday(){
    fx.forEach(([i,j])=>{
      const h=tt[i],a=tt[j];
      if(h===G.userTeam)userHome=true;if(a===G.userTeam)userHome=false;
-     const[hg,ag]=simMatch(teamXI(h),teamXI(a),teamTac(h),teamTac(a),teamBoost(h),teamBoost(a));
+     const{hg,ag,hs,asc}=playTie(h,a,3);
      applyResult(h,a,hg,ag);
      if(h===G.userTeam||a===G.userTeam){const home=h===G.userTeam;
-       G.results.push({md:G.matchday,opp:home?a:h,home,gf:home?hg:ag,ga:home?ag:hg});}
+       G.results.push({md:G.matchday,opp:home?a:h,home,gf:home?hg:ag,ga:home?ag:hg});
+       G.lastScorers={mine:home?hs:asc,theirs:home?asc:hs};}
      out.push({tier,h,a,hg,ag});
    });
  }
@@ -522,7 +553,7 @@ function playCupRound(){
    c.groups.forEach(grp=>{
      c.tmpl[r].forEach(([x,y])=>{
        const h=grp[x],a=grp[y];
-       const[hg,ag]=simMatch(teamXI(h),teamXI(a),teamTac(h),teamTac(a),teamBoost(h),teamBoost(a),2);
+       const{hg,ag}=playTie(h,a,2);
        const H=c.gst[h],A=c.gst[a];
        H.P++;A.P++;H.GF+=hg;H.GA+=ag;A.GF+=ag;A.GA+=hg;
        if(hg>ag){H.W++;A.L++;H.Pts+=3}else if(hg<ag){A.W++;H.L++;A.Pts+=3}else{H.D++;A.D++;H.Pts++;A.Pts++}
@@ -542,7 +573,7 @@ function playCupRound(){
    const al=c.koAlive,winners=[];
    for(let i=0;i<al.length;i+=2){
      const h=al[i],a=al[i+1];
-     let[hg,ag]=simMatch(teamXI(h),teamXI(a),teamTac(h),teamTac(a),teamBoost(h),teamBoost(a),0);
+     let{hg,ag}=playTie(h,a,0);
      let pens=false;
      if(hg===ag){pens=true;if(Math.random()<.5)hg++;else ag++;}
      const wnr=hg>ag?h:a;winners.push(wnr);
@@ -602,7 +633,9 @@ function endSeason(){
  const ut=T(G.userTeam);
  const playedTier=[0,1,2].find(x=>G.tierTeams[x].includes(G.userTeam));
  const myRank=tables[playedTier].indexOf(ut)+1;
- G.history.push({season:G.season,tier:playedTier,rank:myRank,
+ const boot=G.players.slice().sort((a,b)=>(b.gs||0)-(a.gs||0))[0];
+ if(boot&&boot.team===G.userTeam){logAdd(`${boot.name} won the Golden Boot with ${boot.gs} goals!`);}
+ G.history.push({season:G.season,tier:playedTier,rank:myRank,boot:boot?`${boot.name} (${boot.gs})`:"?",
    champ:tables[0][0].name,
    cup:G.cup&&G.cup.winner!==null?T(G.cup.winner).name:"—",
    promo:promoted.has(G.userTeam),releg:relegated.has(G.userTeam)});
@@ -622,7 +655,7 @@ function ageAndRenew(){
  const retiring=[];
  const youthStars=myStars("youth");
  G.players.forEach(p=>{
-   p.age++;p.inj=0;
+   p.age++;p.inj=0;p.gs=0;p.as=0;
    const target=ovrFromAge(p.pot,Math.min(p.age,40));
    const scale=target/Math.max(1,p.ovr);
    ATTRS.forEach(a=>p[a]=clamp(Math.round(p[a]*scale+rnd(-1,1)),18,99));
@@ -673,6 +706,38 @@ const $=(h)=>{const d=document.createElement("div");d.innerHTML=h;return d.first
 const app=document.getElementById("app");
 function toast(msg){const t=$(`<div class="toast">${msg}</div>`);document.body.appendChild(t);
  setTimeout(()=>t.remove(),2600);}
+function showPlayer(id){
+ const p=P(id);if(!p)return;
+ const owned=p.team===G.userTeam;
+ const hasScout=myStars("scout")>0;
+ const club=p.team===null?"Free agent":T(p.team).name;
+ const bars=ATTRS.map(a=>`<div class="arow"><span class="al">${a}</span><span class="abar"><div style="width:${p[a]}%"></div></span><span class="av">${p[a]}</span></div>`).join("");
+ const ov=$(`<div class="overlay"></div>`);
+ ov.appendChild($(`<div class="pcard">
+   <div class="row"><div><h3 style="font-size:17px">${p.name}${p.age>=40?'<span class="ret">R</span>':''}</h3>
+     <div class="small muted">${club} \u00B7 <span class="pos ${p.pos}">${p.pos}</span> \u00B7 ${p.age}y</div></div>
+     <div class="center"><div class="lbl">OVR</div><div class="big">${p.ovr}</div></div></div>
+   <div class="divider"></div>
+   ${bars}
+   <div class="divider"></div>
+   <div class="row">
+     <div class="stat"><div class="lbl">Goals (S)</div><div style="font-weight:800;font-size:16px" class="gold">${p.gs||0}</div></div>
+     <div class="stat"><div class="lbl">Goals (career)</div><div style="font-weight:800;font-size:16px" class="gold">${p.gc||0}</div></div>
+     <div class="stat"><div class="lbl">Apps (career)</div><div style="font-weight:800;font-size:16px">${p.ac||0}</div></div>
+   </div>
+   <div class="divider"></div>
+   <div class="row small">
+     <span>Potential: <b>${owned||hasScout?p.pot:"?"}</b></span>
+     <span>Value: <b class="gold">${money(p.value)}</b></span>
+     <span>Wage: <b>${money(p.wage)}/wk</b></span>
+   </div>
+   ${p.age>=40?'<div class="small" style="margin-top:8px"><span class="ret">R</span> Final season. Retires at year\u2019s end.</div>':''}
+   <button class="btn sec" style="margin-top:14px">Close</button></div>`));
+ ov.onclick=e=>{if(e.target===ov)ov.remove()};
+ ov.querySelector("button").onclick=()=>ov.remove();
+ document.body.appendChild(ov);
+}
+function wireNames(el){el.querySelectorAll("[data-p]").forEach(n=>n.onclick=e=>{e.stopPropagation();showPlayer(+n.dataset.p)});}
 function stars(n){return `<span class="stars">${"\u2605".repeat(n)}${"\u2606".repeat(5-n)}</span>`;}
 function ageCell(p){return p.age>=40?`${p.age}<span class="ret">R</span>`:p.age;}
 
@@ -790,7 +855,8 @@ function viewClub(w){
      w.appendChild($(`<div class="card center">
        <div class="lbl">${home?"Home":"Away"} vs ${opp}</div>
        <div class="scoreline ${res}">${gf} \u2013 ${ga}</div>
-       <div class="small ${res}" style="font-weight:700">${tag}</div></div>`));
+       <div class="small ${res}" style="font-weight:700">${tag}</div>
+       ${G.lastScorers&&G.lastScorers.mine.length?`<div class="small muted" style="margin-top:5px">\u26BD ${[...new Set(G.lastScorers.mine)].map(n=>{const c=G.lastScorers.mine.filter(x=>x===n).length;return n+(c>1?" \u00D7"+c:"")}).join(", ")}</div>`:""}</div>`));
    }
  }
 
@@ -864,11 +930,13 @@ function viewSquad(w){
  const sc=$(`<div class="card"></div>`);
  sc.appendChild($(`<h3 style="font-size:15px;margin-bottom:8px">Full squad (${userTeamObj().squad.length})</h3>`));
  const rows=squadOf(userTeamObj()).sort((a,b)=>b.ovr-a.ovr).map(p=>
-   `<tr><td class="l">${p.name}</td><td class="l"><span class="pos ${p.pos}">${p.pos}</span></td>`+
-   `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td class="muted">${p.pot}</td>`+
+   `<tr><td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td><td class="l"><span class="pos ${p.pos}">${p.pos}</span></td>`+
+   `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td>${p.gs||0}</td>`+
    `<td>${p.inj>0?`<span class="injtag">INJ ${p.inj}</span>`:"\u2713"}</td></tr>`).join("");
- sc.appendChild($(`<table><thead><tr>
-   <th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th>Fit</th></tr></thead><tbody>${rows}</tbody></table>`));
+ const sqt=$(`<table><thead><tr>
+   <th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>Gls</th><th>Fit</th></tr></thead><tbody>${rows}</tbody></table>`);
+ wireNames(sqt);sc.appendChild(sqt);
+ sc.appendChild($(`<div class="small muted" style="margin-top:6px">Tap a name for full attributes, career goals and appearances.</div>`));
  sc.appendChild($(`<div class="small muted" style="margin-top:8px"><span class="ret">R</span> = final season. Players retire at the end of their age-40 year and are replaced in the world by a new 16-year-old.</div>`));
  w.appendChild(sc);
 }
@@ -892,6 +960,21 @@ function viewLeague(w){
  const tier=userTeamObj().tier;
  w.appendChild($(`<div class="grp-h ${TIERS[tier].cls}">${TIERS[tier].glyph} ${TIERS[tier].name}</div>`));
  w.appendChild(leagueTable(tier,true));
+
+ // golden boot race (this tier, all competitions)
+ const sc=G.players.filter(p=>p.team!==null&&T(p.team).tier===tier&&(p.gs||0)>0)
+   .sort((a,b)=>b.gs-a.gs).slice(0,10);
+ if(sc.length){
+   const bc=$(`<div class="card" style="margin-top:12px"></div>`);
+   bc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Golden Boot race</h3>
+     <div class="small muted" style="margin-bottom:6px">All competitions. The world's top scorer wins the Boot at season's end.</div>`));
+   const rows=sc.map((p,i)=>`<tr class="${p.team===G.userTeam?'me':''}"><td class="l muted">${i+1}</td>`+
+     `<td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td>`+
+     `<td class="l small muted">${T(p.team).name}</td><td class="gold"><b>${p.gs}</b></td></tr>`).join("");
+   const bt=$(`<table><thead><tr><th class="l">#</th><th class="l">Player</th><th class="l">Club</th><th>Gls</th></tr></thead><tbody>${rows}</tbody></table>`);
+   wireNames(bt);bc.appendChild(bt);
+   w.appendChild(bc);
+ }
 
  // calendar: league + cup interleaved
  const fc=$(`<div class="card" style="margin-top:12px"></div>`);
@@ -933,7 +1016,7 @@ function viewLeague(w){
    hc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Honours history</h3>`));
    G.history.slice().reverse().forEach(h=>{
      hc.appendChild($(`<div class="logline"><span>Season ${h.season}</span>
-       <span class="small">League: <span class="gold">${h.champ}</span> \u00B7 Cup: <span class="gold">${h.cup}</span></span></div>`));
+       <span class="small">League: <span class="gold">${h.champ}</span> \u00B7 Cup: <span class="gold">${h.cup}</span> · Boot: <span class="gold">${h.boot||"?"}</span></span></div>`));
    });
    w.appendChild(hc);
  }
@@ -966,11 +1049,12 @@ function viewTransfers(w){
  sc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Sell from your squad</h3>
    <div class="small muted" style="margin-bottom:8px">Sales bring 90% of value. Keep 16+ players and 2+ keepers. <span class="ret">R</span> players retire at year's end — sell now or lose the fee.</div>`));
  const sellRows=squadOf(t).sort((a,b)=>b.value-a.value).map(p=>
-   `<tr><td class="l">${p.name}</td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
+   `<tr><td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
    `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td>${money(p.value)}</td>`+
    `<td><button class="btn sm sec" data-sell="${p.id}">Sell</button></td></tr>`).join("");
  const stab=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>Value</th><th></th></tr></thead><tbody>${sellRows}</tbody></table>`);
- stab.querySelectorAll("[data-sell]").forEach(b=>b.onclick=()=>sellPlayer(P(+b.dataset.sell)));
+ stab.querySelectorAll("[data-sell]").forEach(b=>b.onclick=e=>{e.stopPropagation();sellPlayer(P(+b.dataset.sell))});
+ wireNames(stab);
  sc.appendChild(stab);w.appendChild(sc);
 
  const hasScout=myStars("scout")>0;
@@ -988,12 +1072,13 @@ function viewTransfers(w){
  fa=fa.slice(0,40);
  const faRows=fa.map(p=>{
    const can=t.budget>=p.value&&t.squad.length<30;
-   return `<tr><td class="l">${p.name}</td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
+   return `<tr><td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
    `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td class="muted">${hasScout?p.pot:"?"}</td>`+
    `<td>${money(p.value)}</td><td><button class="btn sm ${can?'':'sec'}" data-sign="${p.id}" ${can?'':'disabled'}>Sign</button></td></tr>`;
  }).join("");
  const ftab=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th>Fee</th><th></th></tr></thead><tbody>${faRows}</tbody></table>`);
- ftab.querySelectorAll("[data-sign]").forEach(b=>b.onclick=()=>signPlayer(P(+b.dataset.sign)));
+ ftab.querySelectorAll("[data-sign]").forEach(b=>b.onclick=e=>{e.stopPropagation();signPlayer(P(+b.dataset.sign))});
+ wireNames(ftab);
  mc.appendChild(ftab);w.appendChild(mc);
 }
 function signPlayer(p){
