@@ -80,6 +80,8 @@
   .scoreline{font-size:34px;font-weight:800;color:var(--honey2);text-align:center;letter-spacing:.02em}
   .fixt{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(56,44,96,.4);font-size:12px}
   .res-w{color:var(--win)}.res-d{color:var(--draw)}.res-l{color:var(--loss)}
+  .cupfixt{background:rgba(165,0,68,.16);border-left:3px solid var(--grana);padding-left:6px;border-radius:4px}
+  .cupmark{font-size:9px;font-weight:800;color:#ff9dc0;letter-spacing:.08em;width:30px}
   .amt-p{color:var(--win)}.amt-n{color:var(--loss)}
   .logline{padding:7px 0;border-bottom:1px solid rgba(56,44,96,.4);font-size:12px;display:flex;gap:8px;justify-content:space-between}
   .stars{color:var(--honey);letter-spacing:1px;font-size:11px}
@@ -137,9 +139,12 @@ const TIERS=[
  {name:"Terrestrial League",glyph:"\u263D",cls:"tier1"},
  {name:"Telestial League",glyph:"\u2726",cls:"tier2"}];
 const CUP="The Liahona Cup";
-const CUP_ROUNDS=["First Round","Round of 32","Round of 16","Quarterfinal","Semifinal","Final"];
-const CUP_MARKS=[5,10,15,20,25,30];       // cup round plays after these matchdays
-const CUP_PRIZE=[60000,120000,250000,500000,900000,1600000];
+const CUP_GROUP_MARKS=[3,6,9,12,15];      // group rounds play after these matchdays
+const CUP_KO_MARKS=[18,21,24,27,30];      // knockout rounds after these
+const ALL_CUP_MARKS=[...CUP_GROUP_MARKS,...CUP_KO_MARKS];
+const KO_NAMES=["Round of 32","Round of 16","Quarterfinal","Semifinal","Final"];
+const KO_PRIZE=[150000,300000,600000,1000000,1800000];
+const GROUP_WIN=40000,GROUP_DRAW=15000,QUALIFY_BONUS=100000;
 
 const FORMATIONS={
  "4-4-2":{DEF:4,MID:4,FWD:2},"4-3-3":{DEF:4,MID:3,FWD:3},
@@ -238,7 +243,7 @@ function genWorld(ownerName){
     userTeam:null,season:1,matchday:0,
     tierTeams:[[],[],[]],fixtures:makeFixtures(15),lastResults:null,
     formation:"4-4-2",xi:null,tactics:{mentality:50,pressing:50},
-    ticketPrice:20,finance:null,log:[],history:[],cup:null};
+    ticketPrice:20,finance:null,log:[],history:[],cup:null,results:[]};
  rebuildIndex();rebuildTierTeams();initCup();
 }
 function blankStd(){return{P:0,W:0,D:0,L:0,GF:0,GA:0,Pts:0}}
@@ -273,6 +278,13 @@ function loadGame(){
    G=g;rebuildIndex();
    // club names always come from the code, so renames apply to existing saves
    G.teams.forEach(t=>{t.name=CLUBS[t.id]});
+   if(!G.results)G.results=[];
+   if(!G.cup||!G.cup.phase){        // migrate old cup format: rebuild and replay quietly
+     QUIET=true;initCup();
+     ALL_CUP_MARKS.forEach(mk=>{if(mk<=G.matchday)playCupRound()});
+     QUIET=false;
+     logAdd(`${CUP} was restructured into a World Cup format: groups, then knockouts.`);
+   }
    return true;}
  catch(e){return false;}
 }
@@ -340,6 +352,8 @@ function playMatchday(){
      if(h===G.userTeam)userHome=true;if(a===G.userTeam)userHome=false;
      const[hg,ag]=simMatch(teamXI(h),teamXI(a),teamTac(h),teamTac(a),teamBoost(h),teamBoost(a));
      applyResult(h,a,hg,ag);
+     if(h===G.userTeam||a===G.userTeam){const home=h===G.userTeam;
+       G.results.push({md:G.matchday,opp:home?a:h,home,gf:home?hg:ag,ga:home?ag:hg});}
      out.push({tier,h,a,hg,ag});
    });
  }
@@ -348,7 +362,7 @@ function playMatchday(){
  maybeInjury();
  maybeEvent();
  aiTransfers();
- if(CUP_MARKS.includes(G.matchday))playCupRound();
+ if(ALL_CUP_MARKS.includes(G.matchday))playCupRound();
  saveGame(true);
 }
 
@@ -438,50 +452,123 @@ function aiTransfers(){
 }
 
 /* ======================= THE LIAHONA CUP ======================= */
+let QUIET=false;
+function grTag(r){return "Group Round "+(r+1);}
 function initCup(){
- // seed by tier, shuffled within tier; top 19 seeds get first-round byes
+ // snake-seed the 45 clubs into 9 groups of 5, spreading tiers evenly
  const seeds=[];
  for(let tier=0;tier<3;tier++)seeds.push(...shuffle(G.tierTeams[tier].slice()));
- const byes=seeds.slice(0,19);
- const entrants=shuffle(seeds.slice(19));
- const ties=[];for(let i=0;i<entrants.length;i+=2)ties.push([entrants[i],entrants[i+1]]);
- G.cup={stage:0,alive:byes.slice(),pending:ties,userOut:false,winner:null,log:[]};
+ const groups=Array.from({length:9},()=>[]);
+ seeds.forEach((id,i)=>{const r=Math.floor(i/9);const g=r%2?8-(i%9):i%9;groups[g].push(id)});
+ // 5-team round robin template (indices 0-4, one bye per round)
+ const tmpl=[];let cur=[0,1,2,3,4,-1];
+ for(let r=0;r<5;r++){const rd=[];
+   for(let i=0;i<3;i++){const h=cur[i],a=cur[5-i];if(h!==-1&&a!==-1)rd.push(r%2?[a,h]:[h,a]);}
+   tmpl.push(rd);
+   cur=[cur[0],cur[5],...cur.slice(1,5)];}
+ const gst={};groups.flat().forEach(id=>gst[id]=blankStd());
+ G.cup={phase:"group",groups,tmpl,gst,round:0,
+        koAlive:[],koStage:0,log:[],winner:null,userOut:false,userGames:[]};
+ if(G.userTeam!==null)cupScheduleUser();
+}
+function cupScheduleUser(){
+ // pre-schedule the user's group fixtures for the calendar
+ const c=G.cup;if(!c||c.userGames.length)return;
+ const gi=c.groups.findIndex(g=>g.includes(G.userTeam));
+ for(let r=0;r<5;r++){
+   const ms=c.tmpl[r].map(([x,y])=>[c.groups[gi][x],c.groups[gi][y]]);
+   const mine=ms.find(([h,a])=>h===G.userTeam||a===G.userTeam);
+   if(mine)c.userGames.push({md:CUP_GROUP_MARKS[r],round:grTag(r),
+     opp:mine[0]===G.userTeam?mine[1]:mine[0],home:mine[0]===G.userTeam,played:false});
+   else c.userGames.push({md:CUP_GROUP_MARKS[r],round:grTag(r),rest:true,played:false});
+ }
+}
+function gsort(ids){
+ return ids.slice().sort((a,b)=>{const A=G.cup.gst[a],B=G.cup.gst[b];
+   return B.Pts-A.Pts||(B.GF-B.GA)-(A.GF-A.GA)||B.GF-A.GF});}
+function nextKoUserGame(){
+ const c=G.cup,al=c.koAlive,i=al.indexOf(G.userTeam);
+ if(i<0||c.koStage>=5)return;
+ const opp=(i%2===0)?al[i+1]:al[i-1];
+ c.userGames.push({md:CUP_KO_MARKS[c.koStage],round:KO_NAMES[c.koStage],opp,home:i%2===0,played:false});
+}
+function finishGroups(){
+ const c=G.cup;c.phase="ko";
+ const qual=[];const fourths=[];
+ c.groups.forEach(g=>{const s=gsort(g);qual.push(...s.slice(0,3));fourths.push(s[3]);});
+ qual.push(...gsort(fourths).slice(0,5));   // 27 + 5 best fourth-placed = 32
+ c.koAlive=shuffle(qual);
+ c.log.unshift({round:"Group stage",line:"32 clubs advance to the Round of 32."});
+ if(qual.includes(G.userTeam)){
+   T(G.userTeam).budget+=QUALIFY_BONUS;
+   logAdd(`${CUP}: qualified for the Round of 32.`,QUALIFY_BONUS);
+   if(!QUIET)toast(`${CUP}: you qualified for the knockouts! +${money(QUALIFY_BONUS)}`);
+   nextKoUserGame();
+ }else{
+   c.userOut=true;logAdd(`${CUP}: eliminated in the group stage.`);
+   if(!QUIET)toast(`${CUP}: your group run ends there.`);
+ }
+}
+function cupUserRecord(md,gf,ga,pens){
+ const g=G.cup.userGames.find(x=>x.md===md&&!x.rest);
+ if(g){g.played=true;g.gf=gf;g.ga=ga;g.pens=!!pens;}
 }
 function playCupRound(){
  const c=G.cup;if(!c||c.winner!==null)return;
- let ties;
- if(c.stage===0){ties=c.pending;}
- else{
-   const pool=shuffle(c.alive.slice());c.alive=[];
-   ties=[];for(let i=0;i<pool.length;i+=2)ties.push([pool[i],pool[i+1]]);
- }
- const winners=[];
- ties.forEach(([h,a])=>{
-   let[hg,ag]=simMatch(teamXI(h),teamXI(a),teamTac(h),teamTac(a),teamBoost(h),teamBoost(a),0);
-   let note="";
-   if(hg===ag){const penH=Math.random()<.5;note=" (pens)";if(penH)hg++;else ag++;}
-   const w=hg>ag?h:a;
-   winners.push(w);
-   const line=`${T(h).name} ${hg}–${ag} ${T(a).name}${note}`;
-   c.log.unshift({round:CUP_ROUNDS[c.stage],line});
-   if(h===G.userTeam||a===G.userTeam){
-     const won=w===G.userTeam;
-     if(won){const prize=CUP_PRIZE[c.stage];T(G.userTeam).budget+=prize;
-       logAdd(`${CUP}: won the ${CUP_ROUNDS[c.stage]}.`,prize);
-       toast(`${CUP} ${CUP_ROUNDS[c.stage]}: ${line} — you advance! +${money(prize)}`);}
-     else{c.userOut=true;logAdd(`${CUP}: knocked out in the ${CUP_ROUNDS[c.stage]}.`);
-       toast(`${CUP} ${CUP_ROUNDS[c.stage]}: ${line} — you are out.`);}
+ if(c.phase==="group"){
+   const r=c.round;
+   c.groups.forEach(grp=>{
+     c.tmpl[r].forEach(([x,y])=>{
+       const h=grp[x],a=grp[y];
+       const[hg,ag]=simMatch(teamXI(h),teamXI(a),teamTac(h),teamTac(a),teamBoost(h),teamBoost(a),2);
+       const H=c.gst[h],A=c.gst[a];
+       H.P++;A.P++;H.GF+=hg;H.GA+=ag;A.GF+=ag;A.GA+=hg;
+       if(hg>ag){H.W++;A.L++;H.Pts+=3}else if(hg<ag){A.W++;H.L++;A.Pts+=3}else{H.D++;A.D++;H.Pts++;A.Pts++}
+       if(h===G.userTeam||a===G.userTeam){
+         const home=h===G.userTeam,gf=home?hg:ag,ga=home?ag:hg;
+         cupUserRecord(CUP_GROUP_MARKS[r],gf,ga);
+         let prize=gf>ga?GROUP_WIN:gf===ga?GROUP_DRAW:0;
+         if(prize){T(G.userTeam).budget+=prize;}
+         logAdd(`${CUP} ${grTag(r)}: ${T(h).name} ${hg}\u2013${ag} ${T(a).name}.`,prize||0);
+         if(!QUIET)toast(`${CUP} ${grTag(r)}: ${T(h).name} ${hg}\u2013${ag} ${T(a).name}${prize?` (+${money(prize)})`:""}`);
+       }
+     });
+   });
+   c.round++;
+   if(c.round===5)finishGroups();
+ }else{
+   const al=c.koAlive,winners=[];
+   for(let i=0;i<al.length;i+=2){
+     const h=al[i],a=al[i+1];
+     let[hg,ag]=simMatch(teamXI(h),teamXI(a),teamTac(h),teamTac(a),teamBoost(h),teamBoost(a),0);
+     let pens=false;
+     if(hg===ag){pens=true;if(Math.random()<.5)hg++;else ag++;}
+     const wnr=hg>ag?h:a;winners.push(wnr);
+     const line=`${T(h).name} ${hg}\u2013${ag} ${T(a).name}${pens?" (pens)":""}`;
+     c.log.unshift({round:KO_NAMES[c.koStage],line});
+     if(h===G.userTeam||a===G.userTeam){
+       const home=h===G.userTeam;
+       cupUserRecord(CUP_KO_MARKS[c.koStage],home?hg:ag,home?ag:hg,pens);
+       if(wnr===G.userTeam){const prize=KO_PRIZE[c.koStage];T(G.userTeam).budget+=prize;
+         logAdd(`${CUP}: won the ${KO_NAMES[c.koStage]}.`,prize);
+         if(!QUIET)toast(`${CUP} ${KO_NAMES[c.koStage]}: ${line} \u2014 you advance! +${money(prize)}`);}
+       else{c.userOut=true;logAdd(`${CUP}: knocked out in the ${KO_NAMES[c.koStage]}.`);
+         if(!QUIET)toast(`${CUP} ${KO_NAMES[c.koStage]}: ${line} \u2014 you are out.`);}
+     }
    }
- });
- if(c.stage===0)winners.push(...c.alive);  // 19 byes join the 13 winners = 32
- c.alive=winners;
- c.stage++;
- if(c.alive.length===1){
-   c.winner=c.alive[0];
-   logAdd(`${T(c.winner).name} lifted ${CUP}.`);
+   c.koAlive=winners;c.koStage++;
+   if(winners.length===1){c.winner=winners[0];
+     logAdd(`${T(c.winner).name} lifted ${CUP}.`);}
+   else nextKoUserGame();
  }
 }
-
+function cupShort(){
+ const c=G.cup;
+ if(c.winner!==null)return c.winner===G.userTeam?"Champions!":"Concluded";
+ if(c.userOut)return "Out";
+ if(c.phase==="group")return grTag(c.round)+" next";
+ return KO_NAMES[c.koStage]+" next";
+}
 /* ======================= SEASON TURNOVER ======================= */
 function standingsOf(tier){
  return G.tierTeams[tier].map(id=>T(id))
@@ -512,7 +599,7 @@ function endSeason(){
  ageAndRenew();
  G.teams.forEach(t=>t.st=blankStd());
  rebuildTierTeams();
- G.matchday=0;G.season++;G.lastResults=null;G.xi=null;
+ G.matchday=0;G.season++;G.lastResults=null;G.xi=null;G.results=[];
  initCup();
  saveGame(true);
 }
@@ -589,14 +676,14 @@ function render(){
    <div class="t"><h1>Deseret Football</h1>
    <div class="sub">Season ${G.season} \u00B7 Matchday ${Math.min(G.matchday+1,30)}/30 \u00B7 ${G.owner}</div></div></header>`));
  const wrap=$(`<div class="wrap"></div>`);
- ({club:viewClub,squad:viewSquad,league:viewLeague,transfers:viewTransfers,
-   office:viewOffice,world:viewWorld}[TAB])(wrap);
+ ({club:viewClub,squad:viewSquad,league:viewLeague,cup:viewCup,transfers:viewTransfers,
+   office:viewOffice}[TAB])(wrap);
  app.appendChild(wrap);
  app.appendChild(nav());
 }
 function nav(){
  const items=[["club","\u2302","Club"],["squad","\u26BD","Squad"],["league","\u2691","League"],
-   ["transfers","\u21C4","Market"],["office","\u270E","Office"],["world","\u2600","World"]];
+   ["cup","\u2726","Cup"],["transfers","\u21C4","Market"],["office","\u270E","Office"]];
  const n=$(`<nav></nav>`);
  items.forEach(([k,ic,lab])=>{
    const b=$(`<button class="${TAB===k?'on':''}"><span class="ic">${ic}</span>${lab}</button>`);
@@ -636,7 +723,7 @@ function renderStart(){
        <span class="badge-lg ${TIERS[tier].cls}">Pick</span></div>`);
      row.onclick=()=>{
        G.owner=(nameIn.value.trim()||"President");
-       G.userTeam=id;TAB="club";saveGame(true);render()};
+       G.userTeam=id;cupScheduleUser();TAB="club";saveGame(true);render()};
      s.appendChild(row);
    });
  });
@@ -669,8 +756,7 @@ function viewClub(w){
    </div></div>`));
 
  const tbl=standingsOf(t.tier);const rank=tbl.indexOf(t)+1;
- const cupStatus=G.cup.winner!==null?(G.cup.winner===G.userTeam?"Champions!":"Concluded")
-   :G.cup.userOut?"Out":CUP_ROUNDS[Math.min(G.cup.stage,5)]+" next";
+ const cupStatus=cupShort();
  w.appendChild($(`<div class="card"><div class="row">
    <div><div class="lbl">League</div><div class="big">${rank}<span class="muted" style="font-size:14px">/15</span></div></div>
    <div class="center"><div class="lbl">Record</div><div style="font-weight:800;font-size:17px">
@@ -773,24 +859,65 @@ function viewSquad(w){
 }
 
 /* ---------- LEAGUE ---------- */
+function cupRowForMark(mark){
+ const ug=G.cup.userGames.find(g=>g.md===mark);
+ const idx=CUP_GROUP_MARKS.indexOf(mark);
+ const rname=idx>=0?grTag(idx):KO_NAMES[CUP_KO_MARKS.indexOf(mark)];
+ if(ug&&ug.rest)return `<div class="fixt cupfixt"><span class="cupmark">CUP</span><span style="flex:1">${rname} \u00B7 bye week</span><span class="muted small">rest</span></div>`;
+ if(ug){
+   const opp=T(ug.opp).name;
+   let right=`<span class="muted small">\u2014</span>`;
+   if(ug.played){const cls=ug.gf>ug.ga?"res-w":ug.gf<ug.ga?"res-l":"res-d";
+     right=`<span class="${cls} small" style="font-weight:700">${ug.gf}\u2013${ug.ga}${ug.pens?" p":""}</span>`;}
+   return `<div class="fixt cupfixt"><span class="cupmark">CUP</span><span style="width:14px" class="small muted">${ug.home?'H':'A'}</span><span style="flex:1">${opp} \u00B7 ${ug.round}</span>${right}</div>`;
+ }
+ return `<div class="fixt cupfixt"><span class="cupmark">CUP</span><span style="flex:1" class="muted">${rname} \u00B7 you are not involved</span></div>`;
+}
 function viewLeague(w){
  const tier=userTeamObj().tier;
  w.appendChild($(`<div class="grp-h ${TIERS[tier].cls}">${TIERS[tier].glyph} ${TIERS[tier].name}</div>`));
  w.appendChild(leagueTable(tier,true));
+
+ // calendar: league + cup interleaved
  const fc=$(`<div class="card" style="margin-top:12px"></div>`);
- fc.appendChild($(`<h3 style="font-size:15px;margin-bottom:8px">Your season</h3>`));
+ fc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">Calendar</h3>
+   <div class="small muted" style="margin-bottom:8px">League fixtures with <span class="cupmark">CUP</span> rounds in between. Results fill in as you play.</div>`));
  const tt=G.tierTeams[tier],li=tt.indexOf(G.userTeam);
+ let html="";
  G.fixtures.forEach((rd,md)=>{
-   const pair=rd.find(([i,j])=>i===li||j===li);if(!pair)return;
-   const home=pair[0]===li;const opp=T(tt[home?pair[1]:pair[0]]);
-   const played=md<G.matchday;
-   fc.appendChild($(`<div class="fixt">
-     <span class="muted" style="width:26px">${md+1}</span>
-     <span style="width:14px" class="small muted">${home?'H':'A'}</span>
-     <span style="flex:1">${opp.name}</span>
-     <span class="${played?'gold':'muted'} small">${played?'played':'\u2014'}</span></div>`));
+   const pair=rd.find(([i,j])=>i===li||j===li);
+   if(pair){
+     const home=pair[0]===li;const opp=T(tt[home?pair[1]:pair[0]]);
+     const res=G.results.find(r=>r.md===md);
+     let right=`<span class="muted small">\u2014</span>`;
+     if(res){const cls=res.gf>res.ga?"res-w":res.gf<res.ga?"res-l":"res-d";
+       right=`<span class="${cls} small" style="font-weight:700">${res.gf}\u2013${res.ga}</span>`;}
+     else if(md<G.matchday)right=`<span class="gold small">played</span>`;
+     html+=`<div class="fixt"><span class="muted" style="width:26px">${md+1}</span>
+       <span style="width:14px" class="small muted">${home?'H':'A'}</span>
+       <span style="flex:1">${opp.name}</span>${right}</div>`;
+   }
+   const mark=md+1;
+   if(ALL_CUP_MARKS.includes(mark))html+=cupRowForMark(mark);
  });
+ fc.appendChild($(`<div>${html}</div>`));
  w.appendChild(fc);
+
+ // other divisions
+ [0,1,2].filter(x=>x!==tier).forEach(t2=>{
+   w.appendChild($(`<div class="grp-h ${TIERS[t2].cls}">${TIERS[t2].glyph} ${TIERS[t2].name}</div>`));
+   w.appendChild(leagueTable(t2,true));
+ });
+
+ if(G.history.length){
+   const hc=$(`<div class="card"></div>`);
+   hc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Honours history</h3>`));
+   G.history.slice().reverse().forEach(h=>{
+     hc.appendChild($(`<div class="logline"><span>Season ${h.season}</span>
+       <span class="small">League: <span class="gold">${h.champ}</span> \u00B7 Cup: <span class="gold">${h.cup}</span></span></div>`));
+   });
+   w.appendChild(hc);
+ }
 }
 function leagueTable(tier,mark){
  const tbl=standingsOf(tier);
@@ -948,29 +1075,59 @@ function viewOffice(w){
  w.appendChild(sc);
 }
 
-/* ---------- WORLD ---------- */
-function viewWorld(w){
+/* ---------- CUP ---------- */
+function viewCup(w){
  const c=G.cup;
- const cc=$(`<div class="card"></div>`);
- cc.appendChild($(`<h3 class="center" style="font-size:15px;color:var(--honey)">${CUP}</h3>`));
+ const hc=$(`<div class="card center"></div>`);
+ hc.appendChild($(`<h2 style="font-size:19px;color:var(--honey)">${CUP}</h2>`));
  const status=c.winner!==null
-   ?`<b class="gold">${T(c.winner).name}</b> are the champions`
-   :`${c.alive.length+(c.stage===0?c.pending.length*2:0)} clubs remain \u00B7 next: ${CUP_ROUNDS[Math.min(c.stage,5)]} after matchday ${CUP_MARKS[Math.min(c.stage,5)]}`;
- cc.appendChild($(`<div class="center small" style="margin:4px 0 8px">${status}</div>`));
- c.log.slice(0,8).forEach(e=>cc.appendChild($(`<div class="logline"><span class="muted">${e.round}</span><span>${e.line}</span></div>`)));
- w.appendChild(cc);
- [0,1,2].forEach(tier=>{
-   w.appendChild($(`<div class="grp-h ${TIERS[tier].cls}">${TIERS[tier].glyph} ${TIERS[tier].name}</div>`));
-   w.appendChild(leagueTable(tier,true));
+   ?(c.winner===G.userTeam?`<b class="gold">You are the champions!</b>`:`<b class="gold">${T(c.winner).name}</b> are the champions`)
+   :c.userOut?`Your run is over this season`
+   :c.phase==="group"?`Group stage \u00B7 ${grTag(c.round)} plays after matchday ${CUP_GROUP_MARKS[c.round]}`
+   :`${KO_NAMES[c.koStage]} plays after matchday ${CUP_KO_MARKS[c.koStage]}`;
+ hc.appendChild($(`<div class="small" style="margin:6px 0 4px">${status}</div>`));
+ hc.appendChild($(`<div class="small muted">Format: 9 groups of 5. Top 3 in each group plus the 5 best fourth-place clubs reach the Round of 32, then straight knockout to the Final.</div>`));
+ w.appendChild(hc);
+
+ // your group
+ const gi=c.groups.findIndex(g=>g.includes(G.userTeam));
+ const gc=$(`<div class="card"></div>`);
+ gc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Your group \u00B7 Group ${String.fromCharCode(65+gi)}</h3>`));
+ const rows=gsort(c.groups[gi]).map((id,i)=>{
+   const s=c.gst[id],gd=s.GF-s.GA;
+   let cls=id===G.userTeam?"me ":"";if(i<3)cls+="promo";
+   return `<tr class="${cls}"><td class="l muted">${i+1}</td><td class="l">${T(id).name}</td>`+
+     `<td>${s.P}</td><td>${s.W}</td><td>${s.D}</td><td>${s.L}</td>`+
+     `<td class="${gd>0?'res-w':gd<0?'res-l':''}">${gd>0?'+':''}${gd}</td>`+
+     `<td class="gold"><b>${s.Pts}</b></td></tr>`;
+ }).join("");
+ gc.appendChild($(`<table><thead><tr><th class="l">Pos</th><th class="l">Club</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr></thead><tbody>${rows}</tbody></table>`));
+ gc.appendChild($(`<div class="small muted" style="margin-top:6px">Green edge = qualifying spots. A strong fourth place can still sneak through.</div>`));
+ w.appendChild(gc);
+
+ // your cup fixtures
+ const uc=$(`<div class="card"></div>`);
+ uc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Your cup run</h3>`));
+ let uhtml="";
+ c.userGames.forEach(g=>{
+   if(g.rest){uhtml+=`<div class="fixt"><span class="muted" style="width:34px">MD${g.md}</span><span style="flex:1" class="muted">${g.round} \u00B7 bye</span></div>`;return;}
+   let right=`<span class="muted small">\u2014</span>`;
+   if(g.played){const cls=g.gf>g.ga?"res-w":g.gf<g.ga?"res-l":"res-d";
+     right=`<span class="${cls} small" style="font-weight:700">${g.gf}\u2013${g.ga}${g.pens?" p":""}</span>`;}
+   uhtml+=`<div class="fixt"><span class="muted" style="width:34px">MD${g.md}</span>
+     <span style="width:14px" class="small muted">${g.home?'H':'A'}</span>
+     <span style="flex:1">${T(g.opp).name} \u00B7 <span class="muted small">${g.round}</span></span>${right}</div>`;
  });
- if(G.history.length){
-   const hc=$(`<div class="card"></div>`);
-   hc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Honours history</h3>`));
-   G.history.slice().reverse().forEach(h=>{
-     hc.appendChild($(`<div class="logline"><span>Season ${h.season}</span>
-       <span class="small">League: <span class="gold">${h.champ}</span> \u00B7 Cup: <span class="gold">${h.cup}</span></span></div>`));
-   });
-   w.appendChild(hc);
+ if(!uhtml)uhtml=`<div class="small muted">Fixtures appear once the draw is made.</div>`;
+ uc.appendChild($(`<div>${uhtml}</div>`));
+ w.appendChild(uc);
+
+ // knockout results
+ if(c.log.length){
+   const lc=$(`<div class="card"></div>`);
+   lc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Latest results</h3>`));
+   c.log.slice(0,16).forEach(e=>lc.appendChild($(`<div class="logline"><span class="muted">${e.round}</span><span>${e.line}</span></div>`)));
+   w.appendChild(lc);
  }
 }
 
