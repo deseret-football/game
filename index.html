@@ -128,9 +128,9 @@ const money=n=>{const s=n<0?'-':'';n=Math.abs(Math.round(n));
 /* ---- Restoration name pools ---- */
 /* ===================== REGIONS · NAMES · COUNTRIES (v4) ===================== */
 const REGIONS=[
- {key:"deseret",name:"Deseret",tiers:["Sun League","Moon League","Stars League"]},
+ {key:"deseret",name:"Deseret",tiers:["Salt Lake","Nauvoo","Kirtland"]},
  {key:"kauai",name:"Kauai",tiers:["Poipu","Napali","Princeville"]},
- {key:"founders",name:"Italian Brainrot",tiers:["Sun League","Moon League","Stars League"]}];
+ {key:"founders",name:"Italian Brainrot",tiers:["Sigma","Rizzler","NPC"]}];
 const PER_TIER=10;                       // 10 clubs per tier, 30 per region
 const TIER_GLYPH=["\u2600","\u263D","\u2726"];
 const TIER_CLS=["tier0","tier1","tier2"];
@@ -190,7 +190,7 @@ const XFER_PER_OVR=1000000;
 const REGION_CUP={deseret:"The Liahona Cup",kauai:"The Napali Cup",founders:"The Brainrot Cup"};
 function cupName(regionKey){return REGION_CUP[regionKey||userRegionKey()]||"Regional Cup";}
 Object.defineProperty(globalThis,"CUP",{get(){return G&&G.userTeam!=null?cupName(userRegionKey()):"Regional Cup"}});
-const CONT_CUP="The Restoration Cup";
+const CONT_CUP="The Conrad Cup";
 const WORLD_CUP="The World Cup";
 const SEASON_LEN=18;                      // 10-club double round-robin
 const CUP_GROUP_MARKS=[2,4,6,8,10];       // 5 group rounds
@@ -264,7 +264,7 @@ function newPlayer(id,pos,age,regionKey){
  const rk=regionKey||pick(REGIONS).key;const nm=NAMES[rk];
  const p={id,name:pick(nm.first)+" "+pick(nm.last),pos,age,region:rk,nat:pick(COUNTRIES),
    pot:48+Math.floor(Math.pow(Math.random(),1.6)*47),team:null,inj:0,
-   gs:0,gc:0,as:0,ac:0,susp:0};
+   gs:0,gc:0,as:0,ac:0,susp:0,wcWins:0,wcApps:0};
  makeAttrs(p);p.value=valueOf(p);p.wage=wageOf(p);return p;}
 
 function newStaff(id,role){
@@ -365,7 +365,7 @@ function loadGame(){
    if(!G.news)G.news=[];
    if(G.wcYearsLeft==null)G.wcYearsLeft=4;
    G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0});
-   G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0});
+   G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0});
    if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
    if(!G.window)G.window={day:4,offersMade:0};
    if(!G.offers)G.offers=[];
@@ -899,7 +899,7 @@ function runContinentalCup(RT){
  const winner=alive[0];
  if(winner!=null&&T(winner)){T(winner).contTitles=(T(winner).contTitles||0)+1;
    G.cups.continental.push({season:G.season,winner:T(winner).name,region:T(winner).region});
-   if(winner===G.userTeam)logAdd(`${CONT_CUP}: CHAMPIONS of the Restoration Cup!`,2500000),T(G.userTeam).budget+=2500000;
+   if(winner===G.userTeam)logAdd(`${CONT_CUP}: CHAMPIONS of the Conrad Cup!`,2500000),T(G.userTeam).budget+=2500000;
  }
  G.lastCont={winner:winner!=null&&T(winner)?T(winner).name:"\u2014",log:log.slice(0,10),
    qualified:qualifiers.includes(G.userTeam)};
@@ -918,35 +918,53 @@ function simNations(A,B){
  if(ga===gb){pens=true;if(Math.random()<1/(1+Math.exp(-diff/8)))ga++;else gb++;}
  return{ga,gb,pens};
 }
+function awardXP(p,amt){
+ // small permanent boost spread across a couple of attributes, capped at 99
+ let left=amt;const order=shuffle(ATTRS.slice());
+ for(const a of order){if(left<=0)break;const add=Math.min(left,ri(1,2));p[a]=clamp(p[a]+add,18,99);left-=add;}
+ p.ovr=calcOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
+}
 function runWorldCup(){
- // build national sides, take the 32 strongest that can field a team
  let nations=COUNTRIES.map(natStrength).filter(Boolean)
    .sort((a,b)=>b.rating-a.rating);
  let field=nations.slice(0,32);
  if(field.length<2){return;}
- // pad to a power of 2 if fewer than 32 available
  let size=1;while(size*2<=field.length)size*=2;
  field=shuffle(field.slice(0,size));
+ // squads by country (top 20) + per-player games-played this tournament
+ const squads={};const gamesPlayed={};
+ field.forEach(n=>{squads[n.country]=n.squad.map(p=>p.id);n.squad.forEach(p=>gamesPlayed[p.id]=0);});
  const roundNames={32:"Round of 32",16:"Round of 16",8:"Quarterfinal",4:"Semifinal",2:"Final"};
- const log=[];let semi=[];
+ const log=[];let semi=[],finalists=[];
  let alive=field;
  while(alive.length>1){
    const rn=roundNames[alive.length]||("Round of "+alive.length);
    const next=[];
    if(alive.length===4)semi=alive.map(n=>n.country);
+   if(alive.length===2)finalists=alive.map(n=>n.country);
    for(let i=0;i<alive.length;i+=2){
      const A=alive[i],B=alive[i+1];
+     // both squads log a game played
+     (squads[A.country]||[]).forEach(id=>gamesPlayed[id]=(gamesPlayed[id]||0)+1);
+     (squads[B.country]||[]).forEach(id=>gamesPlayed[id]=(gamesPlayed[id]||0)+1);
      const{ga,gb,pens}=simNations(A,B);
-     const w=ga>=gb?A:B;const l=ga>=gb?B:A;
-     next.push(w);
+     const w=ga>=gb?A:B;next.push(w);
      if(alive.length<=8)log.unshift({round:rn,line:`${A.country} ${ga}\u2013${gb} ${B.country}${pens?" (pens)":""}`});
    }
    alive=next;
  }
  const champ=alive[0].country;
- G.cups.world.push({season:G.season,champion:champ,semifinalists:semi,
-   log:log.slice(0,8)});
- G.lastWC={season:G.season,champion:champ,semifinalists:semi,log:log.slice(0,8)};
+ // XP: more games = more reward (deep runs pay off); winners get a badge
+ Object.keys(gamesPlayed).forEach(id=>{
+   const p=P(+id);if(!p)return;
+   const g=gamesPlayed[id];
+   if(g>0)awardXP(p,g);                      // ~1-2 attribute pts per game survived
+   p.wcApps=(p.wcApps||0)+g;
+ });
+ (squads[champ]||[]).forEach(id=>{const p=P(+id);if(p){p.wcWins=(p.wcWins||0)+1;}});
+ G.cups.world.push({season:G.season,champion:champ,semifinalists:semi,finalists,
+   squads,gamesPlayed,log:log.slice(0,8)});
+ G.lastWC={season:G.season,champion:champ,semifinalists:semi,finalists,squads,gamesPlayed,log:log.slice(0,8)};
  logAdd(`\u2691 World Cup won by ${champ}! (Semifinalists: ${semi.join(", ")})`);
 }
 function ageAndRenew(){
@@ -1119,7 +1137,10 @@ function showPlayer(id){
  const ov=$(`<div class="overlay"></div>`);
  ov.appendChild($(`<div class="pcard">
    <div class="row"><div><h3 style="font-size:17px">${p.name}${p.age>=40?'<span class="ret">R</span>':''}</h3>
-     <div class="small muted">${club} \u00B7 <span class="pos ${p.pos}">${p.pos}</span> \u00B7 ${p.age}y</div></div>
+     <div class="small muted">${club} \u00B7 <span class="pos ${p.pos}">${p.pos}</span> \u00B7 ${p.age}y \u00B7 ${p.nat||"?"}</div>
+     ${p.wcWins>0?`<div class="small gold" style="margin-top:2px">\u2691 WC winner \u00D7${p.wcWins}${p.wcApps>0?" \u00B7 "+p.wcApps+" WC apps":""}</div>`:
+       p.wcApps>0?`<div class="small muted" style="margin-top:2px">\u2691 ${p.wcApps} World Cup app${p.wcApps>1?"s":""}</div>`:""}
+     </div>
      <div class="center"><div class="lbl">OVR</div><div class="big">${p.ovr}</div></div></div>
    <div class="divider"></div>
    ${bars}
@@ -1779,7 +1800,7 @@ function viewCup(w){
  if(G.lastCont){
    cc.appendChild($(`<div class="small" style="margin-bottom:4px">Last season: <b class="gold">${G.lastCont.winner}</b> lifted the ${CONT_CUP}.${G.lastCont.qualified?" You qualified.":""}</div>`));
    G.lastCont.log.slice(0,6).forEach(e=>cc.appendChild($(`<div class="logline"><span class="muted">${e.round}</span><span>${e.line}</span></div>`)));
- }else cc.appendChild($(`<div class="small muted">No edition played yet. Finish a season to see the first Restoration Cup.</div>`));
+ }else cc.appendChild($(`<div class="small muted">No edition played yet. Finish a season to see the first Conrad Cup.</div>`));
  w.appendChild(cc);
 
  // your group
@@ -1828,9 +1849,42 @@ function viewCup(w){
  wcc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">\u2691 ${WORLD_CUP}</h3>
    <div class="small muted" style="margin-bottom:6px">Every 4 seasons the 32 strongest nations (top 20 players each) contest a knockout. Next in ${G.wcYearsLeft||4} season${(G.wcYearsLeft||4)===1?'':'s'}.</div>`));
  if(G.lastWC){
-   wcc.appendChild($(`<div class="small" style="margin-bottom:4px">Reigning champion (Season ${G.lastWC.season}): <b class="gold">${G.lastWC.champion}</b></div>`));
-   wcc.appendChild($(`<div class="small muted" style="margin-bottom:4px">Semifinalists: ${G.lastWC.semifinalists.join(", ")}</div>`));
-   G.lastWC.log.slice(0,6).forEach(e=>wcc.appendChild($(`<div class="logline"><span class="muted">${e.round}</span><span>${e.line}</span></div>`)));
+   const wc=G.lastWC;
+   wcc.appendChild($(`<div class="small" style="margin-bottom:4px">Reigning champion (Season ${wc.season}): <b class="gold">${wc.champion}</b></div>`));
+   // tappable quarterfinal nations: champion, finalists, semis
+   const qfNations=[...new Set([wc.champion,...(wc.finalists||[]),...(wc.semifinalists||[])])].slice(0,4);
+   if(qfNations.length){
+     wcc.appendChild($(`<div class="small muted" style="margin-bottom:4px">Tap a nation to see their 20-man squad:</div>`));
+     const natRow=$(`<div class="row" style="flex-wrap:wrap;gap:4px;margin-bottom:8px"></div>`);
+     qfNations.forEach(nat=>{
+       const btn=$(`<button class="btn sm ${nat===wc.champion?'':'sec'}">${nat===wc.champion?'\u2691 ':''} ${nat}</button>`);
+       btn.onclick=()=>{
+         // clear any existing squad panel and build a new one
+         const old=wcc.querySelector('.wc-squad');if(old)old.remove();
+         const sq=$(`<div class="wc-squad card" style="margin-top:8px;padding:8px 10px"></div>`);
+         const ids=(wc.squads&&wc.squads[nat])||[];
+         const players=ids.map(id=>P(id)).filter(Boolean).sort((a,b)=>b.ovr-a.ovr);
+         sq.appendChild($(`<div class="small gold" style="margin-bottom:6px">${nat===wc.champion?'\u2691 World Cup champions: ':''}${nat} \u00B7 ${players.length} players</div>`));
+         const rows=players.map((p,i)=>{
+           const games=wc.gamesPlayed&&wc.gamesPlayed[p.id]||0;
+           const club=p.team!=null&&T(p.team)?T(p.team).name:'Free agent';
+           return `<tr><td class="l muted">${i+1}</td>`+
+             `<td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td>`+
+             `<td><span class="pos ${p.pos}">${p.pos}</span></td>`+
+             `<td class="gold">${p.ovr}</td>`+
+             `<td class="l small muted">${club}</td>`+
+             `<td class="muted small">${games>0?games+'g':'-'}</td>`+
+             `${p.wcWins>0?'<td class="gold small">\u2691</td>':'<td></td>'}</tr>`;
+         }).join('');
+         const tbl=$(`<table><thead><tr><th class="l">#</th><th class="l">Player</th><th></th><th>OVR</th><th class="l">Club</th><th>Games</th><th>\u2691</th></tr></thead><tbody>${rows}</tbody></table>`);
+         wireNames(tbl);sq.appendChild(tbl);
+         wcc.appendChild(sq);
+       };
+       natRow.appendChild(btn);
+     });
+     wcc.appendChild(natRow);
+   }
+   wc.log.slice(0,6).forEach(e=>wcc.appendChild($(`<div class="logline"><span class="muted">${e.round}</span><span>${e.line}</span></div>`)));
  }else wcc.appendChild($(`<div class="small muted">Not yet contested.</div>`));
  w.appendChild(wcc);
 
