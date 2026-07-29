@@ -225,6 +225,15 @@ const OVR_W={
  DEF:{defending:.4,physical:.24,pace:.15,passing:.11,technique:.1},
  MID:{passing:.3,technique:.26,defending:.14,physical:.15,pace:.15},
  FWD:{shooting:.35,pace:.25,technique:.2,passing:.1,physical:.1}};
+/* TILT boosts the very attributes OVR_W weights most, so it used to be counted
+   twice and handed every player a free bonus unrelated to potential (up to +8.4
+   for forwards). Precompute that premium and subtract it, so a player's OVR
+   tracks the age curve and potential is a genuine ceiling. */
+const TILT_BIAS={};
+for(const _pos in OVR_W){let _b=0;
+ for(const _k in OVR_W[_pos])_b+=(TILT[_pos][_k]||0)*OVR_W[_pos][_k];
+ TILT_BIAS[_pos]=_b;}
+function setOvr(p){p.ovr=Math.min(calcOvr(p),p.pot);return p.ovr;}
 const ATTRS=["pace","shooting","passing","defending","physical","technique"];
 
 function ovrFromAge(pot,age){
@@ -234,9 +243,9 @@ function ovrFromAge(pot,age){
  return clamp(pot*f,20,99);}
 function calcOvr(p){let o=0;for(const k in OVR_W[p.pos])o+=p[k]*OVR_W[p.pos][k];return Math.round(o);}
 function makeAttrs(p){
- const base=ovrFromAge(p.pot,p.age),t=TILT[p.pos];
+ const base=ovrFromAge(p.pot,p.age)-(TILT_BIAS[p.pos]||0),t=TILT[p.pos];
  for(const a of ATTRS)p[a]=clamp(Math.round(base+t[a]+rnd(-6,6)),18,99);
- p.ovr=calcOvr(p);}
+ setOvr(p);}
 function valueOf(p){
  let v=Math.pow(p.ovr/100,3)*42e6;
  if(p.age<24)v*=1.35;else if(p.age<30)v*=1.15;else if(p.age<34)v*=.75;else v*=.38;
@@ -263,7 +272,7 @@ function myStars(role){const s=G.myStaff&&G.myStaff[role];return s?s.stars:0;}
 function newPlayer(id,pos,age,regionKey){
  const rk=regionKey||pick(REGIONS).key;const nm=NAMES[rk];
  const p={id,name:pick(nm.first)+" "+pick(nm.last),pos,age,region:rk,nat:pick(COUNTRIES),
-   pot:48+Math.floor(Math.pow(Math.random(),1.6)*47),team:null,inj:0,
+   pot:56+Math.floor(Math.pow(Math.random(),1.6)*43),team:null,inj:0,
    gs:0,gc:0,as:0,ac:0,susp:0,wcWins:0,wcApps:0};
  makeAttrs(p);p.value=valueOf(p);p.wage=wageOf(p);return p;}
 
@@ -1108,7 +1117,7 @@ function awardXP(p,amt){
  const scaled=Math.min(WC_XP_CAP,Math.ceil(amt/2));
  let left=scaled;const order=shuffle(ATTRS.slice());
  for(const a of order){if(left<=0)break;const add=Math.min(left,1);p[a]=clamp(p[a]+add,18,99);left-=add;}
- p.ovr=calcOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
+ setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
 }
 function runWorldCup(){
  let nations=COUNTRIES.map(natStrength).filter(Boolean)
@@ -1173,7 +1182,7 @@ function ageAndRenew(){
    const _c=p.team!=null?T(p.team):null;
    if(_c&&_c.trait==="youth"&&_c.id!==G.userTeam&&p.age<23)
      ATTRS.forEach(a=>p[a]=clamp(p[a]+ri(0,2),18,99));
-   p.ovr=calcOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
+   setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
    if(p.age>40)retiring.push(p);
  });
  retiring.forEach(old=>{
