@@ -1604,11 +1604,13 @@ function renderStart(){
 function trophyCard(t){
  const c=$(`<div class="card"></div>`);
  c.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Trophy cabinet</h3>`));
+ const cupName=(REGION_CUP[t.region]||"Regional Cup").replace("The ","");
  c.appendChild($(`<div class="row">
    <div class="stat"><div class="lbl">League titles</div><div class="big">${t.leagueTitles||0}</div></div>
-   <div class="stat"><div class="lbl">${CUP.replace("The ","")}</div><div class="big">${t.cupTitles||0}</div></div></div>`));
- if(!(t.leagueTitles||t.cupTitles))
-   c.appendChild($(`<div class="small muted center" style="margin-top:6px">No silverware yet. Win a division or the cup to fill the cabinet.</div>`));
+   <div class="stat"><div class="lbl">${cupName}</div><div class="big">${t.cupTitles||0}</div></div>
+   <div class="stat"><div class="lbl">${CONT_CUP.replace("The ","")}</div><div class="big">${t.contTitles||0}</div></div></div>`));
+ if(!(t.leagueTitles||t.cupTitles||t.contTitles))
+   c.appendChild($(`<div class="small muted center" style="margin-top:6px">No silverware yet. Win a division, the cup, or the ${CONT_CUP} to fill the cabinet.</div>`));
  return c;
 }
 function goalLeaderCard(playerList,title){
