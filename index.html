@@ -609,13 +609,13 @@ function playMatchday(){
  // heal one matchday of injuries before selection (suspensions are served this match, cleared after)
  G.players.forEach(p=>{if(p.inj>0)p.inj--});
  const fx=G.fixtures[G.matchday],out=[];
- let userHome=null;
+ let userHome=null,userOpp=null;
  REGIONS.forEach(reg=>{
    for(let tier=0;tier<3;tier++){
      const clubs=tierClubs(reg.key,tier);
      fx.forEach(([i,j])=>{
        const h=clubs[i],a=clubs[j];
-       if(h===G.userTeam)userHome=true;if(a===G.userTeam)userHome=false;
+       if(h===G.userTeam){userHome=true;userOpp=a;}if(a===G.userTeam){userHome=false;userOpp=h;}
        const{hg,ag,hs,asc}=playTie(h,a,3);
        applyResult(h,a,hg,ag);
        if(h===G.userTeam||a===G.userTeam){const home=h===G.userTeam;
@@ -628,7 +628,7 @@ function playMatchday(){
  G.lastResults=out;G.matchday++;
  // a player who sat out this match has now served the ban
  G.players.forEach(p=>{if(p.susp>0)p.susp--});
- financeTick(userHome===true);
+ financeTick(userHome===true,userOpp);
  aiFinanceTick();
  maybeInjury();
  maybeEvent();
@@ -649,14 +649,76 @@ function repOf(t){
 function effCapacity(t){
  // during construction the club uses a temporary ground at ~55% capacity
  return (t.building>0)?Math.round(t.capacity*0.55):t.capacity;}
-function attendance(t){
+function bootRace(){
+ // the division's top 5 scorers, the names fans travel to see
+ const ureg=userRegionKey(),tier=userTeamObj().tier;
+ return G.players.filter(p=>p.team!==null&&T(p.team)&&T(p.team).region===ureg&&T(p.team).tier===tier&&(p.gs||0)>0)
+   .sort((a,b)=>b.gs-a.gs).slice(0,5).map(p=>p.id);
+}
+function attendanceFactors(t,oppId,cupStage){
+ // Base: reputation and ticket price, as before
  const rep=repOf(t);
- const demand=clamp(.45+rep*.5-(G.ticketPrice-25)*.012,.12,1);
- return Math.round(effCapacity(t)*demand);}
+ let demand=clamp(.42+rep*.45-(G.ticketPrice-25)*.012,.10,1);
+ const f={base:demand,boot:0,prestige:0,form:0,cup:0,stars:[]};
+ const opp=oppId!=null?T(oppId):null;
+ // Golden Boot draw: fans come out for the division's top scorers, on either side
+ if(G.matchday>2){
+   const race=bootRace();
+   const homeStars=squadOf(t).filter(p=>race.includes(p.id));
+   const awayStars=opp?squadOf(opp).filter(p=>race.includes(p.id)):[];
+   const starCount=homeStars.length+awayStars.length;
+   if(starCount>0){f.boot=Math.min(.18,starCount*.07);   // two scorers ~ +14%
+     f.stars=[...homeStars,...awayStars].map(p=>p.name);}
+ }
+ // Prestige pull: storied clubs travel with a following. A meeting of two
+ // powerhouses is the fixture of the season.
+ const myP=(t.prestige||0)/100,opP=opp?(opp.prestige||0)/100:0;
+ f.prestige=myP*.10+opP*.12+(myP>.55&&opP>.55?.10:0);
+ // Form: winners fill grounds, strugglers do not, but a big visitor rescues the gate
+ const tbl=standingsOf(t.region,t.tier),rank=tbl.indexOf(t)+1;
+ if(rank>0)f.form=((PER_TIER/2)-rank)*.018;   // +7% top, -8% bottom
+ // Cup knockouts: the later the round, the bigger the occasion
+ if(cupStage!=null)f.cup=[.06,.12,.20,.30][Math.min(cupStage,3)]||0;
+ const total=clamp(demand+f.boot+f.prestige+f.form+f.cup,.08,1);
+ f.total=total;
+ return f;
+}
+function attendance(t,oppId,cupStage){
+ return Math.round(effCapacity(t)*attendanceFactors(t,oppId,cupStage).total);}
 const STADIUM_TIERS=[
  {addSeats:6000,cost:6000000,label:"Tier 1 expansion (+6k)"},
  {addSeats:10000,cost:14000000,label:"Tier 2 expansion (+10k)"},
  {addSeats:16000,cost:28000000,label:"Tier 3 expansion (+16k)"}];
+function nextHomeFixture(){
+ // the user's next home occasion: league game or home cup tie, whichever is nearer
+ if(G.matchday>=SEASON_LEN)return null;
+ const t=userTeamObj(),tt=tierClubs(t.region,t.tier),li=tt.indexOf(G.userTeam);
+ let league=null;
+ for(let md=G.matchday;md<SEASON_LEN;md++){
+   const fx=G.fixtures[md];
+   for(const[i,j]of fx){if(i===li){league={md,opp:tt[j],cupStage:null};break}}
+   if(league)break;
+ }
+ let cup=null;
+ if(G.cup&&G.cup.userGames){
+   const g=G.cup.userGames.find(x=>!x.played&&!x.rest&&x.home&&x.opp!=null&&x.md>G.matchday);
+   if(g)cup={md:g.md,opp:g.opp,cupStage:G.cup.phase==="ko"?G.cup.koStage:0};
+ }
+ if(league&&cup)return league.md<=cup.md?league:cup;
+ return league||cup;
+}
+function secondaryMarket(){
+ // What the touts are asking. Face value clears at demand=0.62; when the
+ // occasion pushes demand above that, resale climbs, and slack demand
+ // drops resale below face. That spread is the pricing signal.
+ const nx=nextHomeFixture();if(!nx)return null;
+ const t=userTeamObj();
+ const f=attendanceFactors(t,nx.opp,nx.cupStage);
+ const heat=f.total/0.62;
+ const resale=Math.max(5,Math.round(G.ticketPrice*heat));
+ return{opp:T(nx.opp)?T(nx.opp).name:"?",cup:nx.cupStage!=null,factors:f,
+   resale,heat,surge:Math.round((heat-1)*100)};
+}
 function startStadiumBuild(){
  const t=userTeamObj();
  if(t.building>0)return toast("Construction is already under way.");
@@ -675,9 +737,9 @@ function merchWeekly(t){
  const avg=sq.reduce((s,p)=>s+p.ovr,0)/sq.length;
  const stars=sq.filter(p=>p.ovr>=80).length;
  return Math.round((avg*150+stars*9000)*(1+.1*myStars("commercial")));}
-function financeTick(home){
+function financeTick(home,oppId){
  const t=T(G.userTeam);
- const att=home?attendance(t):0;
+ const att=home?attendance(t,oppId):0;
  const gate=att*G.ticketPrice;
  const spon=sponsorWeekly(t),merch=merchWeekly(t);
  const pw=squadWage(t),sw=staffWage();
@@ -920,7 +982,17 @@ function finishGroups(){
 }
 function cupUserRecord(md,gf,ga,pens){
  const g=G.cup.userGames.find(x=>x.md===md&&!x.rest);
- if(g){g.played=true;g.gf=gf;g.ga=ga;g.pens=!!pens;}
+ if(g){g.played=true;g.gf=gf;g.ga=ga;g.pens=!!pens;
+   // a home cup tie sells tickets too, and the occasion grows by round
+   if(g.home&&g.opp!=null){
+     const stage=G.cup.phase==="ko"?G.cup.koStage:null;
+     const t=userTeamObj();
+     const att=attendance(t,g.opp,stage==null?0:stage);
+     const gate=att*G.ticketPrice;
+     t.budget+=gate;
+     logAdd(`${CUP} home gate: ${att.toLocaleString()} attended.`,gate);
+   }
+ }
 }
 function playCupRound(){
  const c=G.cup;if(!c||c.winner!==null)return;
@@ -1355,6 +1427,7 @@ function scoutInfo(){return SCOUT_TIERS[G.scoutTier||"none"];}
 function isScouted(id){return !!(G.scouted&&G.scouted[id]);}
 function scoutCost(){return scoutInfo().cost;}
 function canSeePot(teamId){
+ if(teamId==null)return false;
  if(teamId===G.userTeam)return true;
  return isScouted(teamId)&&scoutInfo().pot;
 }
@@ -1495,7 +1568,7 @@ function showPlayer(id){
    </div>
    <div class="divider"></div>
    <div class="row small">
-     <span>Potential: <b>${owned||hasScout?p.pot:"?"}</b></span>
+     <span>Potential: <b>${owned||(p.team===null&&hasScout)||canSeePot(p.team)||(G.superShort||[]).includes(p.id)?p.pot:"?"}</b></span>
      <span>Value: <b class="gold">${money(p.value)}</b></span>
      <span>Wage: <b>${money(p.wage)}/wk</b></span>
    </div>
@@ -1963,12 +2036,15 @@ function viewTransfers(w){
      <div class="small muted" style="margin-bottom:6px">Best young talent across all regions. Their clubs are already revealed \u2014 buy them from the World tab during the window.</div>`));
    const rows=G.superShort.map(pid=>{const p=P(pid);if(!p||p.team===null)return"";
      const club=T(p.team);
+     const refusedTag=G.refused&&G.refused[p.id];
      return `<tr><td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td>`+
        `<td><span class="pos ${p.pos}">${p.pos}</span></td><td>${p.age}</td>`+
        `<td class="gold">${p.ovr}</td><td class="muted">${p.pot}</td>`+
        `<td class="l small muted">${club?club.name:"?"}</td>`+
-       `<td>${money(transferFee(p))}</td></tr>`;}).join("");
-   const st=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th class="l">Club</th><th>Fee</th></tr></thead><tbody>${rows}</tbody></table>`);
+       `<td>${money(transferFee(p))}</td>`+
+       `<td>${refusedTag?'<span class="small muted">Refused</span>':`<button class="btn sm" data-offer="${p.id}">Offer</button>`}</td></tr>`;}).join("");
+   const st=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th class="l">Club</th><th>Fee</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
+   st.querySelectorAll("[data-offer]").forEach(b=>b.onclick=e=>{e.stopPropagation();buyPlayer(P(+b.dataset.offer))});
    wireNames(st);shc.appendChild(st);
    w.appendChild(shc);
  }
@@ -2056,6 +2132,37 @@ function viewOffice(w){
  fc.querySelector(".slider-row").appendChild(tp);
  fc.appendChild(tpl);
  w.appendChild(fc);
+
+ // ---- box office: what the next home fixture is worth ----
+ {
+   const mkt=secondaryMarket();
+   const bo=$(`<div class="card"></div>`);
+   bo.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">Box office</h3>`));
+   if(mkt){
+     const f=mkt.factors;
+     const pct=v=>((v>=0?"+":"")+Math.round(v*100)+"%");
+     bo.appendChild($(`<div class="small" style="margin-bottom:6px">Next home fixture: <b>vs ${mkt.opp}</b>${mkt.cup?' <span class="pill">cup</span>':''}</div>`));
+     const surgeCls=mkt.surge>=15?"res-w":mkt.surge<=-10?"res-l":"muted";
+     bo.appendChild($(`<div class="row" style="margin-bottom:6px">
+       <div class="stat"><div class="lbl">Face value</div><div style="font-weight:800;font-size:16px">\u00A3${G.ticketPrice}</div></div>
+       <div class="stat"><div class="lbl">Resale market</div><div style="font-weight:800;font-size:16px" class="gold">\u00A3${mkt.resale}</div></div>
+       <div class="stat"><div class="lbl">Demand</div><div style="font-weight:800;font-size:16px" class="${surgeCls}">${mkt.surge>=0?"+":""}${mkt.surge}%</div></div>
+     </div>`));
+     const lines=[];
+     if(f.boot>0)lines.push(`Golden Boot draw ${pct(f.boot)}${f.stars.length?" ("+f.stars.slice(0,2).join(", ")+")":""}`);
+     if(Math.abs(f.prestige)>=.02)lines.push(`Prestige pull ${pct(f.prestige)}`);
+     if(Math.abs(f.form)>=.02)lines.push(`League form ${pct(f.form)}`);
+     if(f.cup>0)lines.push(`Cup occasion ${pct(f.cup)}`);
+     if(lines.length)bo.appendChild($(`<div class="small muted">${lines.join(" \u00B7 ")}</div>`));
+     bo.appendChild($(`<div class="small muted" style="margin-top:6px">${
+       mkt.surge>=15?"Touts are cashing in on this fixture. There is room to raise your price.":
+       mkt.surge<=-10?"Tickets are going below face value. A cheaper seat would fill more of the ground.":
+       "Resale is tracking face value. Your pricing is about right for this fixture."}</div>`));
+   }else{
+     bo.appendChild($(`<div class="small muted">No home fixture scheduled. The box office reopens next season.</div>`));
+   }
+   w.appendChild(bo);
+ }
 
  // ---- stadium ----
  const stad=$(`<div class="card"></div>`);
@@ -2408,7 +2515,7 @@ function viewWorldTeam(w,id){
  const open=inWindow();
  const rc=$(`<div class="card"></div>`);
  rc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">Squad</h3>
-   <div class="small muted" style="margin-bottom:6px">Transfer fee = OVR \u00D7 ${money(XFER_PER_OVR)}. ${open?`Window Day ${G.window.day}, ${2-G.window.offersMade} moves left.`:"Buying opens in the pre-season window."}</div>`));
+   <div class="small muted" style="margin-bottom:6px">Fees scale with rating, age and potential. ${open?`Window Day ${G.window.day}, ${2-G.window.offersMade} moves left.`:"Buying opens in the pre-season window."}</div>`));
  const showPot=sInfo.pot;
  const rows=squadOf(t).sort((a,b)=>b.ovr-a.ovr).map(p=>{
    const fee=transferFee(p);
