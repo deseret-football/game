@@ -1992,7 +1992,7 @@ function leagueTable(regionKey,tier,mark){
 }
 
 /* ---------- TRANSFERS ---------- */
-let MKT_SORT="ovr";let MKT_POS="ALL";
+let MKT_SORT="ovr";let MKT_POS="ALL";let MKT_TAB="free";
 function viewTransfers(w){
  const t=userTeamObj();
  const open=inWindow();
@@ -2070,13 +2070,23 @@ function viewTransfers(w){
  fa.sort((a,b)=> MKT_SORT==="value"?a.value-b.value : MKT_SORT==="age"?a.age-b.age : b[MKT_SORT]-a[MKT_SORT]);
  fa=fa.slice(0,40);
  const faRows=fa.map(p=>{
-   const can=t.budget>=p.value&&t.squad.length<30;
+   const isScouted=MKT_TAB==='scouted';
+   const refused=isScouted&&G.refused&&G.refused[p.id];
+   const fee=isScouted?transferFee(p):p.value;
+   const can=isScouted
+     ?(open&&!refused&&t.budget>=fee&&t.squad.length<30)
+     :(t.budget>=fee&&t.squad.length<30);
+   const btnLabel=isScouted?(refused?'Refused':open?'Offer':'Closed'):'Sign';
+   const potCell=hasScout||isScouted?p.pot:"?";
    return `<tr><td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
-   `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td class="muted">${hasScout?p.pot:"?"}</td>`+
-   `<td>${money(p.value)}</td><td><button class="btn sm ${can?'':'sec'}" data-sign="${p.id}" ${can?'':'disabled'}>Sign</button></td></tr>`;
+   `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td class="muted">${potCell}</td>`+
+   `<td>${money(fee)}</td>`+
+   `<td>${refused?'<span class="small muted">Refused</span>'
+     :`<button class="btn sm ${can?'':'sec'}" data-sign="${p.id}" ${can?'':'disabled'}>${btnLabel}</button>`}</td></tr>`;
  }).join("");
  const ftab=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th>Fee</th><th></th></tr></thead><tbody>${faRows}</tbody></table>`);
- ftab.querySelectorAll("[data-sign]").forEach(b=>b.onclick=e=>{e.stopPropagation();signPlayer(P(+b.dataset.sign))});
+ ftab.querySelectorAll("[data-sign]").forEach(b=>b.onclick=e=>{e.stopPropagation();
+   MKT_TAB==='scouted'?buyPlayer(P(+b.dataset.sign)):signPlayer(P(+b.dataset.sign))});
  wireNames(ftab);
  mc.appendChild(ftab);w.appendChild(mc);
 
