@@ -109,7 +109,7 @@
    DESERET FOOTBALL v4 — multi-region management sim
    3 regions (Deseret / Kauai / Italian Brainrot) · 3 tiers x 10 clubs each
    ~720 players per region, self-renewing · geo names + 45 nationalities
-   Regional cups · Restoration (continental) Cup · World Cup every 4 seasons
+   Regional cups · Conrad (continental) Cup · World Cup every 4 seasons
    Economy: gate, sponsors, merch, TV, stadium tiers · staff + Chief Scout
    Transfers across regions in a 3-day window · release players anytime
    Saves to this browser via localStorage (auto after each matchday)
@@ -125,7 +125,7 @@ const money=n=>{const s=n<0?'-':'';n=Math.abs(Math.round(n));
   if(n>=1e6)return s+'£'+(n/1e6).toFixed(n>=1e7?0:1)+'M';
   if(n>=1e3)return s+'£'+Math.round(n/1e3)+'k';return s+'£'+n};
 
-/* ---- Restoration name pools ---- */
+/* ---- Region name pools ---- */
 /* ===================== REGIONS · NAMES · COUNTRIES (v4) ===================== */
 const REGIONS=[
  {key:"deseret",name:"Deseret",tiers:["Salt Lake","Nauvoo","Kirtland"]},
@@ -291,7 +291,9 @@ function genWorld(ownerName){
      const t={id:tid++,region:reg.key,name,tier,squad:[],
        budget:Math.round(tier===0?rnd(4e6,8e6):tier===1?rnd(1.5e6,3e6):rnd(.6e6,1.2e6)),
        capacity:Math.round(tier===0?rnd(15000,22000):tier===1?rnd(7000,11000):rnd(3000,5500)),
-       stadiumLevel:0,building:0,leagueTitles:0,cupTitles:0,contTitles:0,st:blankStd()};
+       stadiumLevel:0,building:0,leagueTitles:0,cupTitles:0,contTitles:0,
+       prestige:Math.round(tier===0?rnd(38,52):tier===1?rnd(20,30):rnd(8,16)),
+       trait:assignTrait(tier),st:blankStd()};
      teams.push(t);return t;});
    // draft: best players to top tier, balanced within tier (10 clubs/tier)
    const tmpl={GK:3,DEF:7,MID:6,FWD:4};
@@ -364,7 +366,9 @@ function loadGame(){
    if(!G.cups)G.cups={regional:[],continental:[],world:[]};
    if(!G.news)G.news=[];
    if(G.wcYearsLeft==null)G.wcYearsLeft=4;
-   G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0});
+   G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
+     if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
+     if(!t.trait)t.trait=assignTrait(t.tier);});
    G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0});
    if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
    if(!G.window)G.window={day:4,offersMade:0};
@@ -403,6 +407,23 @@ function strength(xi){
 }
 function poisson(l){let L=Math.exp(-l),k=0,p=1;do{k++;p*=Math.random()}while(p>L);return k-1;}
 const NEU={mentality:50,pressing:50};
+const AI_ATT={mentality:72,pressing:62,tempo:68,width:62,line:66};
+const AI_DEF={mentality:32,pressing:42,tempo:38,width:40,line:34};
+/* ---- club identity: hidden traits for AI clubs, revealed by scouting ---- */
+const CLUB_TRAITS={
+ selling:{label:"Selling club",desc:"Cashes in on anyone past 27 and accepts below-market fees. A good place to shop."},
+ hoarder:{label:"Hoarders",desc:"Demands a heavy premium and clings to its squad. Hard to do business with."},
+ youth:{label:"Youth academy",desc:"Develops its under-23s faster than anyone and buys for the future."},
+ local:{label:"Local talent",desc:"Signs only players born in its own region."},
+ attacking:{label:"Attacking philosophy",desc:"Plays high and fast. Scores freely and concedes freely."},
+ defensive:{label:"Defensive philosophy",desc:"Sits deep and grinds out low-scoring games."}};
+// weighted by tier: big clubs hoard and have a style, small clubs sell and develop
+const TRAIT_WEIGHTS=[
+ ["hoarder","hoarder","attacking","attacking","defensive","defensive","youth"],
+ ["attacking","defensive","youth","youth","local","selling","hoarder"],
+ ["selling","selling","youth","local","local","defensive","attacking"]];
+function assignTrait(tier){return pick(TRAIT_WEIGHTS[tier]||TRAIT_WEIGHTS[2]);}
+function traitOf(t){return t&&t.trait?CLUB_TRAITS[t.trait]:null;}
 const SCORE_W={GK:.01,DEF:.25,MID:1,FWD:2.2};
 function attributeGoals(xi,n){
  const scorers=[];
@@ -441,7 +462,12 @@ function simMatch(hXI,aXI,hTac,aTac,hBoost,aBoost,homeAdv=3){
 }
 function teamXI(id){
  return id===G.userTeam?userStartXI():autoXI(T(id),"4-4-2");}
-function teamTac(id){return id===G.userTeam?G.tactics:NEU;}
+function teamTac(id){
+ if(id===G.userTeam)return G.tactics;
+ const t=T(id);
+ if(t&&t.trait==="attacking")return AI_ATT;
+ if(t&&t.trait==="defensive")return AI_DEF;
+ return NEU;}
 function teamBoost(id){return id===G.userTeam?myStars("coach")*1.1:0;}
 function applyResult(h,a,hg,ag){
  const H=T(h).st,A=T(a).st;
@@ -488,8 +514,13 @@ function playMatchday(){
 
 /* ---- economy ---- */
 function repOf(t){
+ // current form (tier + league position) blended with accumulated prestige.
+ // Prestige is deliberately capped at ~a third of reputation so a storied club
+ // that falls off still declines, and a newcomer can still rise.
  const tbl=standingsOf(t.region,t.tier),rank=tbl.indexOf(t)+1;
- return clamp((2-t.tier)*.28+(PER_TIER-rank)/PER_TIER*.4,0,1);}
+ const form=clamp((2-t.tier)*.28+(PER_TIER-rank)/PER_TIER*.4,0,1);
+ const pres=clamp((t.prestige||0)/PRESTIGE_MAX,0,1);
+ return clamp(form*0.65+pres*0.35,0,1);}
 function effCapacity(t){
  // during construction the club uses a temporary ground at ~55% capacity
  return (t.building>0)?Math.round(t.capacity*0.55):t.capacity;}
@@ -528,8 +559,97 @@ function financeTick(home){
  const net=gate+spon+merch-pw-sw;
  const wasOk=t.budget>=0;
  t.budget+=net;
- if(wasOk&&t.budget<0)logAdd("The board warns: the club is in the red. Sell players or trim wages.");
+ // the board tracks how long you stay in the red, and acts if you ignore it
+ if(t.budget<0){
+   G.redWeeks=(G.redWeeks||0)+1;
+   if(wasOk)logAdd("The board warns: the club is in the red. Signings are frozen until you balance the books.");
+   else if(G.redWeeks===6)logAdd("The board is losing patience. Clear the deficit or they will sell players for you.");
+ }else{
+   if(G.redWeeks>0)logAdd("The books are balanced again. The transfer embargo is lifted.");
+   G.redWeeks=0;
+ }
  G.finance={home,att,gate,spon,merch,pw,sw,net};
+}
+function inTheRed(){return userTeamObj().budget<0;}
+function positionNeed(t){
+ const tmpl={GK:3,DEF:7,MID:6,FWD:4};
+ const have={GK:0,DEF:0,MID:0,FWD:0};
+ squadOf(t).forEach(p=>{if(p)have[p.pos]++});
+ let worst="MID",gap=-99;
+ for(const pos in tmpl){const g=tmpl[pos]-have[pos];if(g>gap){gap=g;worst=pos}}
+ return worst;
+}
+function aiSquadTopUp(){
+ // AI clubs lose players to insolvency sales, board sales and trait behaviour
+ // with nothing putting them back. Without this, squads bleed down over decades.
+ const TARGET=20;
+ G.teams.forEach(t=>{
+   if(t.id===G.userTeam)return;
+   let guard=0;
+   while(t.squad.length<TARGET&&guard++<14){
+     let pool=G.freeAgents.map(P).filter(Boolean);
+     if(!pool.length)break;
+     if(t.trait==="local"){const loc=pool.filter(p=>p.region===t.region);if(loc.length)pool=loc;}
+     const need=positionNeed(t);
+     let cands=pool.filter(p=>p.pos===need);
+     if(!cands.length)cands=pool;
+     let sign;
+     if(t.trait==="youth")sign=cands.sort((a,b)=>(b.pot-b.age*2)-(a.pot-a.age*2))[0];
+     else if(t.trait==="selling")sign=cands.sort((a,b)=>a.value-b.value)[0];
+     else{
+       const afford=cands.filter(p=>p.value<=Math.max(t.budget,0)+400000).sort((a,b)=>b.ovr-a.ovr);
+       sign=afford[0]||cands.sort((a,b)=>a.value-b.value)[0];
+     }
+     if(!sign)break;
+     t.budget-=Math.round(sign.value*.5);          // free agents come cheap
+     sign.team=t.id;t.squad.push(sign.id);
+     G.freeAgents=G.freeAgents.filter(x=>x!==sign.id);
+   }
+ });
+}
+function youthAcademyChurn(){
+ // youth clubs move a veteran on each summer so the intake has room
+ G.teams.forEach(t=>{
+   if(t.id===G.userTeam||t.trait!=="youth")return;
+   const gks=squadOf(t).filter(x=>x&&x.pos==="GK").length;
+   const olds=squadOf(t).filter(p=>p&&p.age>=31&&!(p.pos==="GK"&&gks<=2));
+   if(!olds.length)return;
+   const p=olds.sort((a,b)=>b.age-a.age)[0];
+   t.budget+=Math.round(p.value*.9);
+   t.squad=t.squad.filter(x=>x!==p.id);p.team=null;G.freeAgents.push(p.id);
+ });
+}
+function sellingClubSales(){
+ // a selling club cashes in its best player past 27 every close season
+ G.teams.forEach(t=>{
+   if(t.id===G.userTeam||t.trait!=="selling")return;
+   if(t.squad.length<=18)return;
+   const gks=squadOf(t).filter(x=>x&&x.pos==="GK").length;
+   const vets=squadOf(t).filter(p=>p&&p.age>=27&&!(p.pos==="GK"&&gks<=2));
+   if(!vets.length)return;
+   const p=vets.sort((a,b)=>b.value-a.value)[0];
+   t.budget+=Math.round(p.value*.9);
+   t.squad=t.squad.filter(x=>x!==p.id);p.team=null;G.freeAgents.push(p.id);
+   if(G.news&&((p.gc||0)>=25||p.ovr>=72))
+     G.news.unshift({season:G.season,text:`${t.name} cash in again, letting ${p.name} go.`});
+ });
+}
+function boardForcedSales(){
+ // season-end enforcement: the board sells your most valuable players until solvent
+ const t=userTeamObj();if(t.budget>=0)return;
+ let sold=0;
+ while(t.budget<0&&t.squad.length>16){
+   const pool=squadOf(t).filter(p=>!(p.pos==="GK"&&squadOf(t).filter(x=>x.pos==="GK").length<=2));
+   if(!pool.length)break;
+   const p=pool.sort((a,b)=>b.value-a.value)[0];
+   const fee=Math.round(p.value*.9);
+   t.budget+=fee;
+   t.squad=t.squad.filter(x=>x!==p.id);p.team=null;G.freeAgents.push(p.id);
+   if(G.xi)G.xi=G.xi.filter(id=>id!==p.id);
+   logAdd(`The board sold ${p.name} to cover the deficit.`,fee);
+   sold++;
+ }
+ if(sold)G.boardSold=sold;
 }
 
 /* ---- light AI weekly economy: keeps rival budgets realistic year-round ---- */
@@ -600,10 +720,14 @@ function aiTransfers(){
    const sq=squadOf(t).filter(p=>p.pos!=="GK").sort((a,b)=>a.ovr-b.ovr);
    const worst=sq[0];if(!worst)continue;
    const sellFee=Math.round(worst.value*.9);
-   const options=G.freeAgents.map(P)
+   let options=G.freeAgents.map(P)
      .filter(f=>f.pos===worst.pos&&f.ovr>worst.ovr+2&&f.value<=t.budget+sellFee);
+   if(t.trait==="local")options=options.filter(f=>f.region===t.region);
+   if(t.trait==="hoarder"&&Math.random()<0.6)continue;   // reluctant to churn
    if(!options.length)continue;
-   const buy=options.sort((a,b)=>b.ovr-a.ovr)[0];
+   const buy=t.trait==="youth"
+     ? options.sort((a,b)=>(b.pot-b.age*1.5)-(a.pot-a.age*1.5))[0]   // buys for the future
+     : options.sort((a,b)=>b.ovr-a.ovr)[0];
    t.budget+=sellFee-buy.value;
    t.squad=t.squad.filter(id=>id!==worst.id);worst.team=null;G.freeAgents.push(worst.id);
    G.freeAgents=G.freeAgents.filter(id=>id!==buy.id);buy.team=t.id;t.squad.push(buy.id);
@@ -740,7 +864,7 @@ function endSeason(){
  const ureg=userRegionKey();
  const _playedTier=[0,1,2].find(x=>tierClubs(ureg,x).includes(G.userTeam));
  const _myRank=RT[ureg][_playedTier].indexOf(T(G.userTeam))+1;
- _myRankGlobal=_myRank;_playedTierGlobal=_playedTier;
+ G._myRank=_myRank;G._playedTier=_playedTier;
  const promoted=new Set(),relegated=new Set();
  const base=[8e6,3e6,1.2e6];
  // income for every club, TV + placement
@@ -761,6 +885,7 @@ function endSeason(){
  // record league + cup titles
  REGIONS.forEach(r=>{RT[r.key][0][0].leagueTitles++;});
  if(G.cup&&G.cup.winner!==null)T(G.cup.winner).cupTitles++;
+ updatePrestige(RT);
  // promotion / relegation within each region (2 up / 2 down; bottom 2 of tier2 -> expansion)
  REGIONS.forEach(r=>{
    const tab=RT[r.key];
@@ -778,7 +903,8 @@ function endSeason(){
    dropSet.forEach(t=>{
      G.teams=G.teams.filter(x=>x.id!==t.id);
      G.expansion.push({id:t.id,region:r.key,name:t.name,inPool:true,
-       leagueTitles:t.leagueTitles,cupTitles:t.cupTitles,contTitles:t.contTitles||0});
+       leagueTitles:t.leagueTitles,cupTitles:t.cupTitles,contTitles:t.contTitles||0,
+       prestige:Math.round((t.prestige||10)*.8),trait:t.trait});
      t.squad.forEach(pid=>{const p=P(pid);if(p){p.team=null;G.freeAgents.push(pid)}});
    });
    rebuildTeamIndex();
@@ -788,7 +914,8 @@ function endSeason(){
      // expansion clubs keep their own name (not in REGION_CLUBS), leave _clubIdx unset
      const nt={id:e.id,region:r.key,name:e.name,tier:2,squad:[],
        budget:Math.round(rnd(.6e6,1.2e6)),capacity:Math.round(rnd(3000,5500)),
-       stadiumLevel:0,building:0,leagueTitles:e.leagueTitles||0,cupTitles:e.cupTitles||0,contTitles:e.contTitles||0,st:blankStd()};
+       stadiumLevel:0,building:0,leagueTitles:e.leagueTitles||0,cupTitles:e.cupTitles||0,contTitles:e.contTitles||0,
+       prestige:e.prestige||8,trait:e.trait||assignTrait(2),st:blankStd()};
      G.teams.push(nt);
      G.expansion=G.expansion.filter(x=>x.id!==e.id);
      stockClub(nt);
@@ -806,10 +933,15 @@ function endSeason(){
  if(G.cup&&G.cup.winner!==null)
    G.cups.regional.push({season:G.season,region:ureg,winner:T(G.cup.winner).name});
  generateNarratives(RT,ureg,boot,promoted,relegated);
+ boardForcedSales();
+ sellingClubSales();
+ youthAcademyChurn();
+ aiSquadTopUp();
  // finish any stadium builds: capacity grows, temporary ground retired
  G.teams.forEach(t=>{if(t.building>0){t.capacity+=(t.pendingSeats||0);t.stadiumLevel=(t.stadiumLevel||0)+1;t.building=0;t.pendingSeats=0;
    if(t.id===G.userTeam)logAdd(`Stadium expansion complete. Capacity now ${t.capacity.toLocaleString()}.`);}});
  runContinentalCup(RT);
+ recordPrestigeSnapshot();
  G.wcYearsLeft=(G.wcYearsLeft||4)-1;
  if(G.wcYearsLeft<=0){runWorldCup();G.wcYearsLeft=4;}
  ageAndRenew();
@@ -865,8 +997,58 @@ function generateNarratives(RT,ureg,boot,promoted,relegated){
  const me=T(G.userTeam);
  if(promoted.has(G.userTeam))add(`Your ${me.name} win promotion to ${tierName(ureg,me.tier)}.`);
  if(relegated.has(G.userTeam))add(`Your ${me.name} suffer relegation to ${tierName(ureg,me.tier)}.`);
- if(_myRankGlobal===1)add(`Your ${me.name} finish top of ${tierName(ureg,_playedTierGlobal)}.`);
+ if(G._myRank===1)add(`Your ${me.name} finish top of ${tierName(ureg,G._playedTier)}.`);
  if(G.news.length>40)G.news.length=40;
+}
+const PRESTIGE_MAX=100;
+function updatePrestige(RT){
+ // everything decays a little each season, so past glory fades without new results
+ G.teams.forEach(t=>{t.prestige=Math.max(0,(t.prestige||0)*0.94);});
+ REGIONS.forEach(r=>{
+   RT[r.key].forEach((tbl,tier)=>{
+     const weight=[1,0.5,0.25][tier];
+     tbl.forEach((t,rank)=>{
+       let gain=0;
+       if(rank===0)gain=12*weight;            // champions
+       else if(rank===1)gain=7*weight;
+       else if(rank<PER_TIER/2)gain=3*weight; // respectable top half
+       else if(rank>=PER_TIER-2)gain=-2;      // relegation form hurts everywhere
+       t.prestige=clamp((t.prestige||0)+gain,0,PRESTIGE_MAX);
+     });
+   });
+ });
+ // regional cup winner
+ if(G.cup&&G.cup.winner!==null&&T(G.cup.winner))
+   T(G.cup.winner).prestige=clamp((T(G.cup.winner).prestige||0)+6,0,PRESTIGE_MAX);
+}
+function globalPrestige(){return G.teams.slice().sort((a,b)=>(b.prestige||0)-(a.prestige||0));}
+function regionPrestige(rk){return G.teams.filter(t=>t.region===rk).sort((a,b)=>(b.prestige||0)-(a.prestige||0));}
+function prestigeRank(id,list){return list.findIndex(t=>t.id===id)+1;}
+function recordPrestigeSnapshot(){
+ // written after every competition has paid out, so the number is final for the season
+ const h=G.history[G.history.length-1];if(!h)return;
+ const me=T(G.userTeam);if(!me)return;
+ const gl=globalPrestige();
+ h.prestige=Math.round(me.prestige||0);
+ h.pRank=prestigeRank(G.userTeam,gl);
+ h.pRegionRank=prestigeRank(G.userTeam,regionPrestige(me.region));
+ h.pTop=(gl[0]||{}).name||"\u2014";
+}
+function sparkline(vals,h){
+ if(!vals||vals.length<2)return"";
+ const w=240,ht=h||42,max=Math.max(...vals),min=Math.min(...vals),rng=Math.max(1,max-min);
+ const pts=vals.map((v,i)=>{
+   const x=(i/(vals.length-1))*w;
+   const y=ht-4-((v-min)/rng)*(ht-8);
+   return x.toFixed(1)+","+y.toFixed(1);}).join(" ");
+ const last=vals[vals.length-1],lx=w,ly=(ht-4-((last-min)/rng)*(ht-8)).toFixed(1);
+ return `<svg viewBox="0 0 ${w} ${ht}" width="100%" height="${ht}" preserveAspectRatio="none" style="display:block">
+   <polyline points="${pts}" fill="none" stroke="var(--honey)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+   <circle cx="${lx-2}" cy="${ly}" r="3" fill="var(--honey2)"/></svg>`;
+}
+function prestigeLabel(v){
+ return v>=80?"Continental giant":v>=60?"Established power":v>=40?"Well regarded":
+        v>=22?"Modest":v>=10?"Little known":"Unknown";
 }
 function runContinentalCup(RT){
  // 5 from each region (15) + best 6th-place club as wildcard = 16, clean bracket
@@ -898,6 +1080,7 @@ function runContinentalCup(RT){
  }
  const winner=alive[0];
  if(winner!=null&&T(winner)){T(winner).contTitles=(T(winner).contTitles||0)+1;
+   T(winner).prestige=clamp((T(winner).prestige||0)+15,0,PRESTIGE_MAX);
    G.cups.continental.push({season:G.season,winner:T(winner).name,region:T(winner).region});
    if(winner===G.userTeam)logAdd(`${CONT_CUP}: CHAMPIONS of the Conrad Cup!`,2500000),T(G.userTeam).budget+=2500000;
  }
@@ -918,10 +1101,13 @@ function simNations(A,B){
  if(ga===gb){pens=true;if(Math.random()<1/(1+Math.exp(-diff/8)))ga++;else gb++;}
  return{ga,gb,pens};
 }
+const WC_XP_CAP=3;              // most a player can gain from one tournament
 function awardXP(p,amt){
- // small permanent boost spread across a couple of attributes, capped at 99
- let left=amt;const order=shuffle(ATTRS.slice());
- for(const a of order){if(left<=0)break;const add=Math.min(left,ri(1,2));p[a]=clamp(p[a]+add,18,99);left-=add;}
+ // development is for young players: veterans gain nothing from a deep run
+ if(p.age>26)return;
+ const scaled=Math.min(WC_XP_CAP,Math.ceil(amt/2));
+ let left=scaled;const order=shuffle(ATTRS.slice());
+ for(const a of order){if(left<=0)break;const add=Math.min(left,1);p[a]=clamp(p[a]+add,18,99);left-=add;}
  p.ovr=calcOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
 }
 function runWorldCup(){
@@ -933,7 +1119,8 @@ function runWorldCup(){
  field=shuffle(field.slice(0,size));
  // squads by country (top 20) + per-player games-played this tournament
  const squads={};const gamesPlayed={};
- field.forEach(n=>{squads[n.country]=n.squad.map(p=>p.id);n.squad.forEach(p=>gamesPlayed[p.id]=0);});
+ field.forEach(n=>{squads[n.country]=n.squad.map(p=>p.id);n.squad.forEach(p=>gamesPlayed[p.id]=0);
+   n.core=n.squad.slice(0,14).map(p=>p.id);});   // rotation core actually features
  const roundNames={32:"Round of 32",16:"Round of 16",8:"Quarterfinal",4:"Semifinal",2:"Final"};
  const log=[];let semi=[],finalists=[];
  let alive=field;
@@ -945,8 +1132,8 @@ function runWorldCup(){
    for(let i=0;i<alive.length;i+=2){
      const A=alive[i],B=alive[i+1];
      // both squads log a game played
-     (squads[A.country]||[]).forEach(id=>gamesPlayed[id]=(gamesPlayed[id]||0)+1);
-     (squads[B.country]||[]).forEach(id=>gamesPlayed[id]=(gamesPlayed[id]||0)+1);
+     (A.core||[]).forEach(id=>gamesPlayed[id]=(gamesPlayed[id]||0)+1);
+     (B.core||[]).forEach(id=>gamesPlayed[id]=(gamesPlayed[id]||0)+1);
      const{ga,gb,pens}=simNations(A,B);
      const w=ga>=gb?A:B;next.push(w);
      if(alive.length<=8)log.unshift({round:rn,line:`${A.country} ${ga}\u2013${gb} ${B.country}${pens?" (pens)":""}`});
@@ -972,12 +1159,20 @@ function ageAndRenew(){
  const youthStars=myStars("youth");
  G.players.forEach(p=>{
    p.age++;p.inj=0;p.susp=0;p.gs=0;p.as=0;
+   // Scale attributes by how far the age curve moved this year, NOT by target/ovr.
+   // Dividing by the weighted ovr stripped each player's positional tilt on their
+   // first birthday, permanently deflating the whole world by ~6 OVR after season 1.
+   const prev=ovrFromAge(p.pot,Math.min(Math.max(p.age-1,16),40));
    const target=ovrFromAge(p.pot,Math.min(p.age,40));
-   const scale=target/Math.max(1,p.ovr);
+   const scale=target/Math.max(1,prev);
    ATTRS.forEach(a=>p[a]=clamp(Math.round(p[a]*scale+rnd(-1,1)),18,99));
    // youth coach: extra growth for user's under-23s
    if(youthStars&&p.team===G.userTeam&&p.age<23)
      ATTRS.forEach(a=>p[a]=clamp(p[a]+ri(0,Math.ceil(youthStars/2)),18,99));
+   // youth academy clubs develop their own prospects faster
+   const _c=p.team!=null?T(p.team):null;
+   if(_c&&_c.trait==="youth"&&_c.id!==G.userTeam&&p.age<23)
+     ATTRS.forEach(a=>p[a]=clamp(p[a]+ri(0,2),18,99));
    p.ovr=calcOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
    if(p.age>40)retiring.push(p);
  });
@@ -1053,6 +1248,13 @@ function transferFee(p){
  if(p.age<=21)mult=1.30; else if(p.age<=25)mult=1.12; else if(p.age<=29)mult=1.0;
  else if(p.age<=32)mult=0.78; else if(p.age<=35)mult=0.55; else mult=0.38;
  if(p.pot-p.ovr>=10&&p.age<24)mult*=1.15;      // wonderkid premium
+ // the selling club's identity moves the asking price
+ const seller=p.team!=null?T(p.team):null;
+ if(seller&&seller.id!==G.userTeam){
+   if(seller.trait==="selling")mult*=0.75;      // motivated seller
+   if(seller.trait==="hoarder")mult*=1.65;      // will not be moved cheaply
+   if(seller.trait==="youth"&&p.age<24)mult*=1.35;  // protects its prospects
+ }
  return Math.max(500000,Math.round(base*mult/100000)*100000);
 }
 function buyPlayer(p){
@@ -1061,6 +1263,7 @@ function buyPlayer(p){
  if(p.team===null)return signPlayer(p);
  if(G.window.offersMade>=2)return toast("Only 2 moves per window day. Advance the day.");
  const fee=transferFee(p);
+ if(inTheRed())return toast("Signings are frozen while the club is in the red.");
  if(t.budget<fee)return toast(`Need ${money(fee)} for this transfer.`);
  if(t.squad.length>=30)return toast("Squad is full (30 max).");
  const seller=T(p.team);
@@ -1123,7 +1326,7 @@ function advanceWindowDay(){
 }
 
 /* ======================= UI ======================= */
-let TAB="club";let START_REGION=null;let _myRankGlobal=0,_playedTierGlobal=0;
+let TAB="club";let START_REGION=null;
 const $=(h)=>{const d=document.createElement("div");d.innerHTML=h;return d.firstElementChild};
 const app=document.getElementById("app");
 function toast(msg){const t=$(`<div class="toast">${msg}</div>`);document.body.appendChild(t);
@@ -1292,7 +1495,7 @@ function viewClub(w){
  const ovr=Math.round(squadOf(t).reduce((a,p)=>a+p.ovr,0)/t.squad.length);
  w.appendChild($(`<div class="card">
    <div class="row"><h2 style="font-size:21px">${t.name}</h2>${tierTag(t)}</div>
-   <div class="small muted">President ${G.owner} \u00B7 ${regionOf(t.region).name}</div>
+   <div class="small muted">President ${G.owner} \u00B7 ${regionOf(t.region).name} \u00B7 <span class="gold">${prestigeLabel(t.prestige||0)}</span> (${Math.round(t.prestige||0)})</div>
    <div class="divider"></div>
    <div class="row">
      <div class="stat"><div class="lbl">Squad</div><div class="big">${ovr}</div></div>
@@ -1379,6 +1582,33 @@ function viewClub(w){
    w.appendChild($(`<div class="card small"><div class="lbl">Last season</div>
      <div style="margin-top:5px">Finished <b>${ordinal(h.rank)}</b> \u00B7 League champions: <span class="gold">${h.champ}</span> \u00B7 Cup: <span class="gold">${h.cup}</span></div></div>`));
  }
+ // ---- prestige, its movement, and what it means ----
+ {
+   const gl=globalPrestige(),rg=regionPrestige(t.region);
+   const gRank=prestigeRank(t.id,gl),rRank=prestigeRank(t.id,rg);
+   const hist=G.history.filter(h=>typeof h.prestige==="number");
+   const series=hist.map(h=>h.prestige);
+   const prev=series.length>1?series[series.length-2]:null;
+   const cur=Math.round(t.prestige||0);
+   const delta=prev===null?null:cur-prev;
+   const pc=$(`<div class="card"></div>`);
+   pc.appendChild($(`<div class="row"><h3 style="font-size:15px">Prestige</h3>
+     <div><b class="gold">${prestigeLabel(cur)}</b> <span class="muted small">${cur}/100</span></div></div>`));
+   pc.appendChild($(`<div class="row" style="margin-top:6px">
+     <div class="stat"><div class="lbl">Universe</div><div style="font-weight:800;font-size:16px">${gRank}<span class="muted" style="font-size:12px">/${gl.length}</span></div></div>
+     <div class="stat"><div class="lbl">${regionOf(t.region).name}</div><div style="font-weight:800;font-size:16px">${rRank}<span class="muted" style="font-size:12px">/${rg.length}</span></div></div>
+     <div class="stat"><div class="lbl">Since last season</div><div style="font-weight:800;font-size:16px" class="${delta===null?'muted':delta>0?'res-w':delta<0?'res-l':'muted'}">${delta===null?"\u2014":(delta>0?"+":"")+delta}</div></div>
+   </div>`));
+   if(series.length>1){
+     pc.appendChild($(`<div style="margin-top:8px">${sparkline(series)}</div>`));
+     pc.appendChild($(`<div class="row small muted"><span>S${hist[0].season}</span><span>S${hist[hist.length-1].season}</span></div>`));
+   }else{
+     pc.appendChild($(`<div class="small muted" style="margin-top:8px">The trend line appears once you have finished two seasons.</div>`));
+   }
+   pc.appendChild($(`<div class="small muted" style="margin-top:8px">Prestige drives sponsorship, merchandise and attendance. You earn it from league finishes, cup runs and ${CONT_CUP} titles, and lose 6% of it every season, so it has to be defended.</div>`));
+   w.appendChild(pc);
+ }
+
  if(G.news&&G.news.length){
    const nc=$(`<div class="card"></div>`);
    nc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Around the world</h3>`));
@@ -1628,6 +1858,7 @@ function viewTransfers(w){
 }
 function signPlayer(p){
  const t=userTeamObj();
+ if(inTheRed())return toast("Signings are frozen while the club is in the red.");
  if(t.budget<p.value)return toast("Not enough in the budget.");
  if(t.squad.length>=30)return toast("Squad is full (30 max).");
  t.budget-=p.value;G.freeAgents=G.freeAgents.filter(x=>x!==p.id);
@@ -1710,7 +1941,7 @@ function viewOffice(w){
    rel.onclick=()=>{G.scoutTier=null;saveGame(true);render()};scc.appendChild(rel);
  }
  scc.appendChild($(`<div class="divider"></div>`));
- scc.appendChild($(`<div class="small"><b>Chief Scout</b> \u00B7 ${money(SUPER_SCOUT_COST)}/yr \u00B7 scours all regions and delivers a shortlist of the best young talent on Day 1 of each transfer window.</div>`));
+ scc.appendChild($(`<div class="small"><b>Chief Scout</b> \u00B7 ${money(SUPER_SCOUT_COST)}/yr (${money(Math.round(SUPER_SCOUT_COST/40))}/wk on the wage bill) \u00B7 scours all regions and delivers a shortlist of the best young talent on Day 1 of each transfer window.</div>`));
  const ssRow=$(`<div class="row" style="margin-top:6px"></div>`);
  if(G.superScout){
    ssRow.appendChild($(`<span class="small gold">Employed \u2605</span>`));
@@ -1816,7 +2047,7 @@ function viewCup(w){
      `<td class="gold"><b>${s.Pts}</b></td></tr>`;
  }).join("");
  gc.appendChild($(`<table><thead><tr><th class="l">Pos</th><th class="l">Club</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr></thead><tbody>${rows}</tbody></table>`));
- gc.appendChild($(`<div class="small muted" style="margin-top:6px">Green edge = qualifying spots. A strong fourth place can still sneak through.</div>`));
+ gc.appendChild($(`<div class="small muted" style="margin-top:6px">Green edge = qualifying spots. The four best third-placed clubs also go through.</div>`));
  w.appendChild(gc);
 
  // your cup fixtures
@@ -1919,19 +2150,45 @@ function viewWorld(w){
    <div class="small muted" style="margin-bottom:6px">Tap a club to view trophies, scorers, and scout their squad. Scout status: <b class="gold">${scoutInfo().label}</b>.</div>`));
  w.appendChild(sc);
  if(WORLD_REGION===null)WORLD_REGION=userRegionKey();
- const rt=$(`<div class="row" style="gap:4px;margin-bottom:10px"></div>`);
+ const rt=$(`<div class="row" style="gap:4px;margin-bottom:6px"></div>`);
  REGIONS.forEach(r=>{
    const b=$(`<button class="btn sm ${WORLD_REGION===r.key?'':'sec'}" style="flex:1">${r.name}${r.key===userRegionKey()?' \u2605':''}</button>`);
    b.onclick=()=>{WORLD_REGION=r.key;render()};rt.appendChild(b);
  });
  w.appendChild(rt);
+ const gb=$(`<button class="btn sm ${WORLD_REGION==="global"?'':'sec'}" style="width:100%;margin-bottom:10px">\u2605 Prestige across the universe</button>`);
+ gb.onclick=()=>{WORLD_REGION=WORLD_REGION==="global"?userRegionKey():"global";render()};
+ w.appendChild(gb);
+
+ if(WORLD_REGION==="global"){
+   const gl=globalPrestige();
+   const hd=$(`<div class="card"></div>`);
+   hd.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">Prestige across the universe</h3>
+     <div class="small muted">All ${gl.length} clubs from every region, ranked by standing. Tap any club to view it.</div>`));
+   w.appendChild(hd);
+   const rows=gl.map((t,i)=>{
+     const cls=t.id===G.userTeam?"me":"";
+     return `<tr class="${cls}" data-club="${t.id}"><td class="l muted">${i+1}</td>`+
+       `<td class="l">${t.name}${t.id===G.userTeam?' <span class="pill">you</span>':''}</td>`+
+       `<td class="l small muted">${regionOf(t.region).name}</td>`+
+       `<td class="l small muted">${tierName(t.region,t.tier)}</td>`+
+       `<td class="gold"><b>${Math.round(t.prestige||0)}</b></td>`+
+       `<td class="l small muted">${prestigeLabel(t.prestige||0)}</td></tr>`;
+   }).join("");
+   const tb=$(`<div class="card" style="padding:8px 10px"><table><thead><tr>
+     <th class="l">#</th><th class="l">Club</th><th class="l">Region</th><th class="l">Division</th>
+     <th>Prestige</th><th class="l"></th></tr></thead><tbody>${rows}</tbody></table></div>`);
+   tb.querySelectorAll("[data-club]").forEach(r=>r.onclick=()=>{WORLD_TEAM=+r.dataset.club;render()});
+   w.appendChild(tb);
+   return;
+ }
  [0,1,2].forEach(tier=>{
    w.appendChild($(tierHead(WORLD_REGION,tier)));
    const list=$(`<div class="card" style="padding:6px 8px"></div>`);
    standingsOf(WORLD_REGION,tier).forEach(t=>{
      const row=$(`<div class="teampick" style="margin-bottom:4px">
        <div><b>${t.name}</b>${t.id===G.userTeam?' <span class="pill">you</span>':''}
-       <div class="small muted">\u2691 ${t.leagueTitles||0} \u00B7 \u2726 ${t.cupTitles||0}${(t.contTitles||0)?' \u00B7 \u2b50 '+t.contTitles:''}${isScouted(t.id)?' \u00B7 scouted':''}</div></div>
+       <div class="small muted">\u2691 ${t.leagueTitles||0} \u00B7 \u2726 ${t.cupTitles||0}${(t.contTitles||0)?' \u00B7 \u2b50 '+t.contTitles:''} \u00B7 ${prestigeLabel(t.prestige||0)} ${Math.round(t.prestige||0)}${isScouted(t.id)?' \u00B7 scouted':''}</div></div>
        <span class="badge-lg">View</span></div>`);
      row.onclick=()=>{WORLD_TEAM=t.id;render()};
      list.appendChild(row);
@@ -1944,7 +2201,18 @@ function viewWorldTeam(w,id){
  const back=$(`<button class="btn sec sm" style="margin-bottom:10px">\u2190 All clubs</button>`);
  back.onclick=()=>{WORLD_TEAM=null;render()};w.appendChild(back);
  w.appendChild($(`<div class="card"><div class="row"><h2 style="font-size:19px">${t.name}</h2>${tierTag(t)}</div>
-   <div class="small muted">${regionOf(t.region).name} \u00B7 ${(t.capacity/1000).toFixed(0)}k seats \u00B7 ${money(t.budget)} budget</div></div>`));
+   <div class="small muted">${regionOf(t.region).name} \u00B7 ${(t.capacity/1000).toFixed(0)}k seats \u00B7 ${money(t.budget)} budget</div>
+   <div class="small" style="margin-top:4px">Prestige: <b class="gold">${prestigeLabel(t.prestige||0)}</b> (${Math.round(t.prestige||0)}/100) \u00B7 ${prestigeRank(t.id,globalPrestige())} of ${G.teams.length} in the universe</div></div>`));
+ if(!me){
+   const tc=$(`<div class="card"></div>`);
+   tc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">Club identity</h3>`));
+   if(isScouted(id)&&traitOf(t))
+     tc.appendChild($(`<div class="small"><b class="gold">${traitOf(t).label}</b></div>
+       <div class="small muted" style="margin-top:3px">${traitOf(t).desc}</div>`));
+   else
+     tc.appendChild($(`<div class="small muted">Unknown. Scout this club to learn how they do business.</div>`));
+   w.appendChild(tc);
+ }
  w.appendChild(trophyCard(t));
  w.appendChild(goalLeaderCard(squadOf(t),"Top scorers (career)"));
 
