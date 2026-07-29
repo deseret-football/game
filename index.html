@@ -106,10 +106,12 @@
 <div id="app"></div>
 <script>
 /* ========================================================================
-   DESERET FOOTBALL v2 — Restoration-themed management sim
-   3 tiers (Celestial/Terrestrial/Telestial) · 15 clubs each · 20 players/club
-   1000-player pool, ages 16-40 (40/age), self-renewing · The Liahona Cup
-   Economy: gate, sponsors, merch, TV · Staff market · Events · AI trading
+   DESERET FOOTBALL v4 — multi-region management sim
+   3 regions (Deseret / Kauai / Italian Brainrot) · 3 tiers x 10 clubs each
+   ~720 players per region, self-renewing · geo names + 45 nationalities
+   Regional cups · Restoration (continental) Cup · World Cup every 4 seasons
+   Economy: gate, sponsors, merch, TV, stadium tiers · staff + Chief Scout
+   Transfers across regions in a 3-day window · release players anytime
    Saves to this browser via localStorage (auto after each matchday)
    ======================================================================== */
 
@@ -254,7 +256,8 @@ function squadOf(t){return t.squad.map(P);}
 function squadWage(t){return squadOf(t).reduce((s,p)=>s+p.wage,0);}
 function staffWage(){let s=0;for(const r in G.myStaff){const st=G.myStaff[r];if(st)s+=STAFF_WAGE[st.stars]}
  if(G.scoutTier)s+=SCOUT_TIERS[G.scoutTier].wage;
- if(G.superScout)s+=Math.round(SUPER_SCOUT_COST/40);return s;}
+ if(G.superScout)s+=Math.round(SUPER_SCOUT_COST/40); // £5M/yr spread over ~40 pay periods
+ return s;}
 function myStars(role){const s=G.myStaff&&G.myStaff[role];return s?s.stars:0;}
 
 function newPlayer(id,pos,age,regionKey){
@@ -269,7 +272,7 @@ function newStaff(id,role){
  return{id,role,stars,name:pick(NAMES.deseret.first)+" "+pick(NAMES.deseret.last)};}
 
 function genWorld(ownerName){
- let pid=0,tid=0;
+ let pid=0,tid=0;const clubIdx={};
  const players=[],teams=[],freeAgents=[];
  // per region: build 30 clubs (3 tiers x 10), fill with geo-named players
  REGIONS.forEach((reg,ri_)=>{
@@ -284,6 +287,7 @@ function genWorld(ownerName){
    // 30 clubs for this region
    const clubTeams=REGION_CLUBS[reg.key].map((name,i)=>{
      const tier=i<10?0:i<20?1:2;
+     clubIdx[tid]=i;
      const t={id:tid++,region:reg.key,name,tier,squad:[],
        budget:Math.round(tier===0?rnd(4e6,8e6):tier===1?rnd(1.5e6,3e6):rnd(.6e6,1.2e6)),
        capacity:Math.round(tier===0?rnd(15000,22000):tier===1?rnd(7000,11000):rnd(3000,5500)),
@@ -314,7 +318,7 @@ function genWorld(ownerName){
     tierTeams:null,fixtures:makeFixtures(PER_TIER),lastResults:null,
     formation:"4-4-2",xi:null,tactics:{mentality:50,pressing:50,tempo:50,width:50,line:50},
     ticketPrice:20,finance:null,log:[],history:[],cup:null,results:[],
-    cups:{regional:[],continental:[],world:[]},wcYearsLeft:4};
+    cups:{regional:[],continental:[],world:[]},wcYearsLeft:4,_clubIdx:clubIdx};
  rebuildIndex();rebuildTierTeams();
 }
 function blankStd(){return{P:0,W:0,D:0,L:0,GF:0,GA:0,Pts:0}}
@@ -353,9 +357,12 @@ function loadGame(){
    if(g.ver!==4)return false;       // pre-region saves cannot be migrated; start fresh
    G=g;rebuildIndex();
    // club names always come from code, so renames apply to existing saves
-   G.teams.forEach(t=>{const list=REGION_CLUBS[t.region];});
+   // reapply club names from code so future renames stick to existing saves
+   G.teams.forEach(t=>{const list=REGION_CLUBS[t.region];const i=G._clubIdx&&G._clubIdx[t.id];
+     if(list&&typeof i==="number"&&list[i])t.name=list[i];});
    if(!G.results)G.results=[];
    if(!G.cups)G.cups={regional:[],continental:[],world:[]};
+   if(!G.news)G.news=[];
    if(G.wcYearsLeft==null)G.wcYearsLeft=4;
    G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0});
    G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0});
@@ -733,6 +740,7 @@ function endSeason(){
  const ureg=userRegionKey();
  const _playedTier=[0,1,2].find(x=>tierClubs(ureg,x).includes(G.userTeam));
  const _myRank=RT[ureg][_playedTier].indexOf(T(G.userTeam))+1;
+ _myRankGlobal=_myRank;_playedTierGlobal=_playedTier;
  const promoted=new Set(),relegated=new Set();
  const base=[8e6,3e6,1.2e6];
  // income for every club, TV + placement
@@ -777,6 +785,7 @@ function endSeason(){
    const incoming=shuffle(G.expansion.filter(e=>e.inPool&&e.region===r.key)).slice(0,2);
    incoming.forEach(e=>{
      e.inPool=false;
+     // expansion clubs keep their own name (not in REGION_CLUBS), leave _clubIdx unset
      const nt={id:e.id,region:r.key,name:e.name,tier:2,squad:[],
        budget:Math.round(rnd(.6e6,1.2e6)),capacity:Math.round(rnd(3000,5500)),
        stadiumLevel:0,building:0,leagueTitles:e.leagueTitles||0,cupTitles:e.cupTitles||0,contTitles:e.contTitles||0,st:blankStd()};
@@ -796,6 +805,7 @@ function endSeason(){
  // record regional cup winner into cups history
  if(G.cup&&G.cup.winner!==null)
    G.cups.regional.push({season:G.season,region:ureg,winner:T(G.cup.winner).name});
+ generateNarratives(RT,ureg,boot,promoted,relegated);
  // finish any stadium builds: capacity grows, temporary ground retired
  G.teams.forEach(t=>{if(t.building>0){t.capacity+=(t.pendingSeats||0);t.stadiumLevel=(t.stadiumLevel||0)+1;t.building=0;t.pendingSeats=0;
    if(t.id===G.userTeam)logAdd(`Stadium expansion complete. Capacity now ${t.capacity.toLocaleString()}.`);}});
@@ -833,6 +843,30 @@ function stockClub(t){
    }
  }
  rebuildIndex();
+}
+function generateNarratives(RT,ureg,boot,promoted,relegated){
+ if(!G.news)G.news=[];
+ const add=(text)=>G.news.unshift({season:G.season,text});
+ // league champions each region
+ REGIONS.forEach(r=>{
+   const champ=RT[r.key][0][0];
+   const streak=(G._titleStreak&&G._titleStreak[champ.id]||0)+1;
+   G._titleStreak=G._titleStreak||{};
+   // reset other clubs' streaks in this region's top tier
+   RT[r.key][0].forEach(t=>{if(t.id!==champ.id)G._titleStreak[t.id]=0;});
+   G._titleStreak[champ.id]=streak;
+   if(streak>=3)add(`${champ.name} win ${tierName(r.key,0)} again \u2014 ${streak} titles in a row.`);
+   else add(`${champ.name} are crowned champions of ${tierName(r.key,0)}.`);
+ });
+ // golden boot milestone
+ if(boot&&boot.gs>=25){const club=boot.team!=null&&T(boot.team)?T(boot.team).name:"a free agent";
+   add(`${boot.name} nets ${boot.gs} for ${club}, taking the Golden Boot.`);}
+ // your club's story
+ const me=T(G.userTeam);
+ if(promoted.has(G.userTeam))add(`Your ${me.name} win promotion to ${tierName(ureg,me.tier)}.`);
+ if(relegated.has(G.userTeam))add(`Your ${me.name} suffer relegation to ${tierName(ureg,me.tier)}.`);
+ if(_myRankGlobal===1)add(`Your ${me.name} finish top of ${tierName(ureg,_playedTierGlobal)}.`);
+ if(G.news.length>40)G.news.length=40;
 }
 function runContinentalCup(RT){
  // 5 from each region (15) + best 6th-place club as wildcard = 16, clean bracket
@@ -930,7 +964,7 @@ function ageAndRenew(){
    if(p.age>40)retiring.push(p);
  });
  retiring.forEach(old=>{
-   const kid=newPlayer(G.nextPid++,old.pos,16);
+   const kid=newPlayer(G.nextPid++,old.pos,16,old.region);
    const homeTeam=old.team!==null?T(old.team):null;
    if(homeTeam){
      homeTeam.squad=homeTeam.squad.filter(x=>x!==old.id);
@@ -940,6 +974,18 @@ function ageAndRenew(){
    G.players=G.players.filter(x=>x.id!==old.id);
    G.players.push(kid);
  });
+ // soft cap: if the pool drifted above target, retire surplus unattached free agents
+ const TARGET=REGIONS.length*760;   // small headroom over 720/region
+ if(G.players.length>TARGET){
+   const cutN=G.players.length-TARGET;
+   const cuttable=G.freeAgents.map(P).filter(Boolean)
+     .sort((a,b)=>(b.age-a.age)||(a.ovr-b.ovr));   // oldest, weakest first
+   const cut=new Set(cuttable.slice(0,cutN).map(p=>p.id));
+   if(cut.size){
+     G.players=G.players.filter(p=>!cut.has(p.id));
+     G.freeAgents=G.freeAgents.filter(id=>!cut.has(id));
+   }
+ }
  rebuildIndex();
 }
 
@@ -1059,7 +1105,7 @@ function advanceWindowDay(){
 }
 
 /* ======================= UI ======================= */
-let TAB="club";let START_REGION=null;
+let TAB="club";let START_REGION=null;let _myRankGlobal=0,_playedTierGlobal=0;
 const $=(h)=>{const d=document.createElement("div");d.innerHTML=h;return d.firstElementChild};
 const app=document.getElementById("app");
 function toast(msg){const t=$(`<div class="toast">${msg}</div>`);document.body.appendChild(t);
@@ -1300,7 +1346,10 @@ function viewClub(w){
      let m=`Finished ${ordinal(h.rank)} in ${tierName(userRegionKey(),before)}.`;
      if(h.promo)m+=" Promoted \u2600";if(h.releg)m+=" Relegated \u2193";
      if(G.userSurvived){m+=" \u2014 you dodged expulsion as a rival folded!";G.userSurvived=false;}
-     toast(m);render()};
+     toast(m);
+     if(G.lastCont)setTimeout(()=>toast(`${CONT_CUP}: ${G.lastCont.winner} champions${G.lastCont.qualified?" \u00B7 you qualified":""}.`),1400);
+     if(G.lastWC&&G.lastWC.season===G.season-1)setTimeout(()=>toast(`\u2691 World Cup won by ${G.lastWC.champion}!`),2800);
+     render()};
    w.appendChild(b);
  }
 
@@ -1308,6 +1357,12 @@ function viewClub(w){
    const h=G.history[G.history.length-1];
    w.appendChild($(`<div class="card small"><div class="lbl">Last season</div>
      <div style="margin-top:5px">Finished <b>${ordinal(h.rank)}</b> \u00B7 League champions: <span class="gold">${h.champ}</span> \u00B7 Cup: <span class="gold">${h.cup}</span></div></div>`));
+ }
+ if(G.news&&G.news.length){
+   const nc=$(`<div class="card"></div>`);
+   nc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Around the world</h3>`));
+   G.news.slice(0,8).forEach(n=>nc.appendChild($(`<div class="logline"><span>${n.text}</span><span class="muted small">S${n.season}</span></div>`)));
+   w.appendChild(nc);
  }
 }
 
@@ -1570,16 +1625,6 @@ function releasePlayer(p){
  logAdd(`Released ${p.name}.`);
  toast(`${p.name} released.`);saveGame(true);render();
 }
-function sellPlayer(p){
- const t=userTeamObj();
- if(t.squad.length<=16)return toast("Cannot go below 16 players.");
- if(p.pos==="GK"&&squadOf(t).filter(x=>x.pos==="GK").length<=2)return toast("Keep at least 2 keepers.");
- const fee=Math.round(p.value*.9);t.budget+=fee;
- t.squad=t.squad.filter(x=>x!==p.id);p.team=null;G.freeAgents.push(p.id);
- if(G.xi)G.xi=G.xi.filter(id=>id!==p.id);
- logAdd(`Sold ${p.name}.`,fee);
- toast(`Sold ${p.name} for ${money(fee)}.`);saveGame(true);render();
-}
 
 /* ---------- OFFICE ---------- */
 function viewOffice(w){
@@ -1743,7 +1788,7 @@ function viewCup(w){
  gc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Your group \u00B7 Group ${String.fromCharCode(65+gi)}</h3>`));
  const rows=gsort(c.groups[gi]).map((id,i)=>{
    const s=c.gst[id],gd=s.GF-s.GA;
-   let cls=id===G.userTeam?"me ":"";if(i<3)cls+="promo";
+   let cls=id===G.userTeam?"me ":"";if(i<2)cls+="promo";
    return `<tr class="${cls}"><td class="l muted">${i+1}</td><td class="l">${T(id).name}</td>`+
      `<td>${s.P}</td><td>${s.W}</td><td>${s.D}</td><td>${s.L}</td>`+
      `<td class="${gd>0?'res-w':gd<0?'res-l':''}">${gd>0?'+':''}${gd}</td>`+
