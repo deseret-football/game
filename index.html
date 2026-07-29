@@ -206,8 +206,18 @@ const FORMATIONS={
 const ATKW={GK:.02,DEF:.15,MID:.55,FWD:1.0};
 const DEFW={GK:1.15,DEF:1.0,MID:.45,FWD:.1};
 
+const COACH_TIERS=[
+ {label:"No head coach",wage:0,boost:0,
+  desc:"You pick the side, the shape and the tactics yourself."},
+ {label:"Head Coach",wage:8000,boost:0.8,
+  desc:"Auto-picks your strongest available XI in your chosen formation."},
+ {label:"Senior Coach",wage:18000,boost:1.6,
+  desc:"Everything above, and chooses the formation that best suits your squad."},
+ {label:"Elite Coach",wage:32000,boost:2.5,
+  desc:"Everything above, and tunes all five tactical dials to suit the XI he picks."}];
+function coachTier(){return Math.max(0,Math.min(3,G.coachTier||0));}
+function coachInfo(){return COACH_TIERS[coachTier()];}
 const STAFF_ROLES={
- coach:{name:"Head Coach",desc:"Boosts match performance"},
  fitness:{name:"Fitness Coach",desc:"Fewer injuries"},
  physio:{name:"Physio",desc:"Faster injury recovery"},
  youth:{name:"Youth Coach",desc:"Faster development of under-23s"},
@@ -266,6 +276,7 @@ function squadWage(t){return squadOf(t).reduce((s,p)=>s+p.wage,0);}
 function staffWage(){let s=0;for(const r in G.myStaff){const st=G.myStaff[r];if(st)s+=STAFF_WAGE[st.stars]}
  if(G.scoutTier)s+=SCOUT_TIERS[G.scoutTier].wage;
  if(G.superScout)s+=Math.round(SUPER_SCOUT_COST/40); // £5M/yr spread over ~40 pay periods
+ s+=coachInfo().wage;
  return s;}
 function myStars(role){const s=G.myStaff&&G.myStaff[role];return s?s.stars:0;}
 
@@ -323,7 +334,8 @@ function genWorld(ownerName){
    expansion.push({id:exid++,region:reg.key,name,inPool:true})));
 
  G={ver:4,owner:ownerName||"President",nextPid:pid,nextTid:tid,expansion,
-    scouted:{},scoutTier:null,superScout:false,superShort:null,window:null,offers:[],
+    scouted:{},refused:{},scoutTier:null,superScout:false,superShort:null,window:null,offers:[],
+    coachTier:0,
     players,teams,freeAgents,staffPool,myStaff:{},
     userTeam:null,userRegion:null,season:1,matchday:0,
     tierTeams:null,fixtures:makeFixtures(PER_TIER),lastResults:null,
@@ -375,6 +387,11 @@ function loadGame(){
    if(!G.cups)G.cups={regional:[],continental:[],world:[]};
    if(!G.news)G.news=[];
    if(G.wcYearsLeft==null)G.wcYearsLeft=4;
+   if(!G.refused)G.refused={};
+   if(G.coachTier==null){G.coachTier=0;
+     if(G.myStaff&&G.myStaff.coach){G.coachTier=Math.min(3,Math.max(1,Math.round(G.myStaff.coach.stars/2)));delete G.myStaff.coach;}}
+   if(G.myStaff&&G.myStaff.coach)delete G.myStaff.coach;          // ghost from any path
+   G.staffPool=(G.staffPool||[]).filter(s=>!!STAFF_ROLES[s.role]); // drop orphaned roles
    G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
      if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
      if(!t.trait)t.trait=assignTrait(t.tier);});
@@ -395,6 +412,90 @@ function wipeSave(){try{localStorage.removeItem(SAVE_KEY)}catch(e){}}
 
 /* ======================= MATCH ENGINE ======================= */
 function fit(list){return list.filter(p=>p.inj<=0&&(p.susp||0)<=0);}
+function averageRival(){
+ // a league-average opponent from your own division, used to judge shape and dials
+ const t=userTeamObj();
+ const peers=tierClubs(t.region,t.tier).filter(id=>id!==G.userTeam).map(T).filter(Boolean);
+ if(!peers.length)return{atk:60,def:60};
+ let atk=0,def=0;
+ peers.forEach(pt=>{const s=strength(autoXI(pt,"4-4-2"));atk+=s.atk;def+=s.def});
+ return{atk:atk/peers.length,def:def/peers.length};
+}
+function nextOpponent(){
+ // The actual next fixture: whichever of the league game or a cup tie plays first.
+ // Returns {strength, tac, name, homeAdv, comp} or null in the off-season.
+ if(G.matchday>=SEASON_LEN)return null;
+ // league opponent this matchday
+ let league=null;
+ const t=userTeamObj(),tt=tierClubs(t.region,t.tier),li=tt.indexOf(G.userTeam);
+ const fx=G.fixtures[G.matchday];
+ for(const[i,j]of fx){if(i===li||j===li){
+   const oppId=tt[i===li?j:i];
+   league={id:oppId,home:i===li,comp:"league"};break;}}
+ // cup tie attached to THIS matchday (plays right after it)
+ let cup=null;
+ if(G.cup&&G.cup.userGames){
+   const g=G.cup.userGames.find(x=>!x.played&&!x.rest&&x.md===G.matchday+1&&x.opp!=null);
+   if(g&&T(g.opp))cup={id:g.opp,home:g.home,comp:"cup"};
+ }
+ // the league game plays first on a shared matchday; prefer the nearer contest,
+ // and when both exist the cup tie is the marquee game to prepare for
+ const pickd=cup||league;
+ if(!pickd||!T(pickd.id))return null;
+ const opp=T(pickd.id);
+ return{strength:strength(autoXI(opp,"4-4-2")),tac:teamTac(opp.id),
+   name:opp.name,homeAdv:pickd.home?3:0,comp:pickd.comp};
+}
+function coachBestFormation(){
+ // tier 2+: try every shape and keep the one with the best expected goal margin
+ const t=userTeamObj(),rival=averageRival(),neu={mentality:50,pressing:50,tempo:50,width:50,line:50};
+ let best=null;
+ for(const f in FORMATIONS){
+   const xi=autoXI(t,f);if(xi.length<11)continue;
+   const[xh,xa]=xgPair(strength(xi),rival,neu,neu,teamBoost(G.userTeam),0,1.5);
+   const s=xh-xa;
+   if(!best||s>best.s)best={f,s};
+ }
+ return best?best.f:G.formation;
+}
+function coachBestTactics(xi){
+ // tier 3: search the dial space using the real match maths, aimed at the
+ // actual next opponent (their XI and their tactics). Falls back to a
+ // league-average rival in the off-season.
+ const nx=nextOpponent();
+ const rival=nx?nx.strength:averageRival();
+ const rTac=nx?nx.tac:{mentality:50,pressing:50,tempo:50,width:50,line:50};
+ const adv=nx?nx.homeAdv:1.5;
+ const neu={mentality:50,pressing:50,tempo:50,width:50,line:50};
+ const sH=strength(xi),boost=teamBoost(G.userTeam);
+ const oppBoost=nx?0.8:0;   // assume a competent opposing bench
+ let best=null;
+ for(let m=0;m<=100;m+=10)for(let p=0;p<=100;p+=10)for(let tp=0;tp<=100;tp+=10)
+ for(let w=0;w<=100;w+=10)for(let l=0;l<=100;l+=10){
+   const d={mentality:m,pressing:p,tempo:tp,width:w,line:l};
+   const[xh,xa]=xgPair(sH,rival,d,rTac,boost,oppBoost,adv);
+   const s=xh-xa;
+   if(!best||s>best.s)best={d,s};
+ }
+ return best?best.d:neu;
+}
+function coachAutoSetup(){
+ const tier=coachTier();
+ if(tier<1)return toast("Hire a head coach to use auto pick.");
+ const t=userTeamObj();
+ const notes=[];
+ if(tier>=2){const f=coachBestFormation();
+   if(f!==G.formation)notes.push(`switched to ${f}`);G.formation=f;}
+ const xi=autoXI(t,G.formation);
+ G.xi=xi.map(p=>p.id);
+ notes.unshift(`picked your strongest XI`);
+ if(tier>=3){G.tactics=coachBestTactics(xi);
+   const nx=nextOpponent();
+   notes.push(nx?`tuned tactics for ${nx.name}${nx.comp==="cup"?" (cup)":""}`:"tuned your tactics");}
+ logAdd(`Head coach ${notes.join(", ")}.`);
+ toast(`Coach ${notes.join(", ")}.`);
+ saveGame(true);render();
+}
 function autoXI(team,formation,useAll){
  const F=FORMATIONS[formation];
  const pool=useAll?squadOf(team):fit(squadOf(team));
@@ -451,8 +552,8 @@ function playTie(h,a,adv){
  [...hXI,...aXI].forEach(p=>{p.as=(p.as||0)+1;p.ac=(p.ac||0)+1});
  return{hg,ag,hs:attributeGoals(hXI,hg),asc:attributeGoals(aXI,ag)};
 }
-function simMatch(hXI,aXI,hTac,aTac,hBoost,aBoost,homeAdv=3){
- const sH=strength(hXI),sA=strength(aXI);
+function xgPair(hXI,aXI,hTac,aTac,hBoost,aBoost,homeAdv=3){
+ const sH=hXI.atk!==undefined?hXI:strength(hXI),sA=aXI.atk!==undefined?aXI:strength(aXI);
  const mH=(hTac.mentality-50),mA=(aTac.mentality-50);
  const pH=(hTac.pressing-50),pA=(aTac.pressing-50);
  const tmpH=((hTac.tempo||50)-50),tmpA=((aTac.tempo||50)-50);
@@ -460,13 +561,22 @@ function simMatch(hXI,aXI,hTac,aTac,hBoost,aBoost,homeAdv=3){
  const lnH=((hTac.line||50)-50),lnA=((aTac.line||50)-50);
  // tempo: faster = more chances both ways. width: wide = more attack, thinner defense.
  // line: high = presses opponent (cuts their attack) but concedes space in behind.
- const atkH=sH.atk+mH*.08+pH*.04+tmpH*.03+wdH*.03+homeAdv+hBoost;
- const atkA=sA.atk+mA*.08+pA*.04+tmpA*.03+wdA*.03+aBoost;
- const defH=sH.def-Math.max(0,mH)*.05-Math.max(0,pH)*.02-wdH*.03-lnA*.04+lnH*.02+hBoost*.6;
- const defA=sA.def-Math.max(0,mA)*.05-Math.max(0,pA)*.02-wdA*.03-lnH*.04+lnA*.02+aBoost*.6;
+ // Every dial must cost something, or sliding all five to 100 is a free win.
+ // tempo opens the game up for BOTH sides. A high line pins the opponent back
+ // but leaves space in behind. Attacking intent and pressing cost real shape.
+ // Costs are tuned so each dial's marginal gain roughly equals its marginal cost
+ // for a balanced side. That makes the best settings depend on your squad and
+ // your opponent rather than "slide everything to 100".
+ const atkH=sH.atk+mH*.08+pH*.04+tmpH*.03+wdH*.03+tmpA*.045+homeAdv+hBoost;
+ const atkA=sA.atk+mA*.08+pA*.04+tmpA*.03+wdA*.03+tmpH*.045+aBoost;
+ const defH=sH.def-Math.max(0,mH)*.12-Math.max(0,pH)*.06-wdH*.045-lnA*.04-lnH*.06+hBoost*.6;
+ const defA=sA.def-Math.max(0,mA)*.12-Math.max(0,pA)*.06-wdA*.045-lnH*.04-lnA*.06+aBoost*.6;
  const var_=1+(tmpH+tmpA)/400;   // fast tempo widens score variance
- const xgH=clamp(1.35*var_*Math.exp((atkH-defA)/22),.12,6),
-       xgA=clamp(1.12*var_*Math.exp((atkA-defH)/22),.12,6);
+ return[clamp(1.35*var_*Math.exp((atkH-defA)/22),.12,6),
+        clamp(1.12*var_*Math.exp((atkA-defH)/22),.12,6)];
+}
+function simMatch(hXI,aXI,hTac,aTac,hBoost,aBoost,homeAdv=3){
+ const[xgH,xgA]=xgPair(hXI,aXI,hTac,aTac,hBoost,aBoost,homeAdv);
  return[poisson(xgH),poisson(xgA)];
 }
 function teamXI(id){
@@ -477,7 +587,13 @@ function teamTac(id){
  if(t&&t.trait==="attacking")return AI_ATT;
  if(t&&t.trait==="defensive")return AI_DEF;
  return NEU;}
-function teamBoost(id){return id===G.userTeam?myStars("coach")*1.1:0;}
+function teamBoost(id){
+ if(id===G.userTeam)return coachInfo().boost;
+ // AI clubs carry an implicit coaching setup scaled by their level, so the
+ // user's Elite Coach is an edge over peers, not a monopoly on coaching.
+ const t=T(id);if(!t)return 0;
+ return[1.6,0.8,0.4][t.tier]||0.4;
+}
 function applyResult(h,a,hg,ag){
  const H=T(h).st,A=T(a).st;
  H.P++;A.P++;H.GF+=hg;H.GA+=ag;A.GF+=ag;A.GA+=hg;
@@ -957,7 +1073,7 @@ function endSeason(){
  G.teams.forEach(t=>t.st=blankStd());
  rebuildTierTeams();
  G.matchday=0;G.season++;G.lastResults=null;G.xi=null;G.results=[];
- G.scouted={};G.window={day:1,offersMade:0};G.offers=[];genOffers();
+ G.scouted={};G.refused={};G.window={day:1,offersMade:0};G.offers=[];genOffers();
  G.superShort=null;if(G.superScout)buildSuperShortlist();
  for(const role in STAFF_ROLES){
    if(G.staffPool.filter(s=>s.role===role).length<3&&G.staffPool.length<48)
@@ -1276,6 +1392,21 @@ function buyPlayer(p){
  if(t.budget<fee)return toast(`Need ${money(fee)} for this transfer.`);
  if(t.squad.length>=30)return toast("Squad is full (30 max).");
  const seller=T(p.team);
+ // a club can simply refuse. Once they do, that player is off the market
+ // until next season, so you cannot keep asking.
+ if(!G.refused)G.refused={};
+ if(G.refused[p.id])
+   return toast(`${seller.name} will not sell ${p.name} this season.`);
+ let refuseChance=0.20;
+ if(seller.trait==="hoarder")refuseChance=0.40;
+ else if(seller.trait==="selling")refuseChance=0.08;
+ if(Math.random()<refuseChance){
+   G.refused[p.id]=true;
+   G.window.offersMade++;   // a formal approach costs a move whether it lands or not
+   logAdd(`${seller.name} rejected the approach for ${p.name}.`);
+   toast(`${seller.name} will not sell ${p.name} this season. The approach used one of today's moves.`);
+   saveGame(true);render();return;
+ }
  t.budget-=fee;seller.budget+=fee;
  seller.squad=seller.squad.filter(x=>x!==p.id);
  p.team=t.id;t.squad.push(p.id);
@@ -1302,7 +1433,7 @@ const SUPER_SCOUT_COST=5000000;
 function buildSuperShortlist(){
  // proactive scout scours all regions for value: young, high-ceiling, affordable-ish
  const t=userTeamObj();if(!t)return;
- const pool=G.players.filter(p=>p.team!==null&&p.team!==G.userTeam&&(p.pot-p.ovr>=6||p.age<=23));
+ const pool=G.players.filter(p=>p.team!==null&&p.team!==G.userTeam&&p.age<=34&&(p.pot-p.ovr>=6||p.age<=23));
  const scored=pool.map(p=>({p,score:p.pot*1.4+(p.pot-p.ovr)*2+(28-Math.min(p.age,28))*1.5+p.ovr*0.5}))
    .sort((a,b)=>b.score-a.score);
  // spread across positions so the list is useful
@@ -1646,9 +1777,18 @@ function viewSquad(w){
  w.appendChild(fc);
 
  const xc=$(`<div class="card"></div>`);
+ const ctier=coachTier();
+ const clabel=ctier===0?"Auto-pick \u00B7 needs a coach"
+   :ctier===1?"Coach: pick XI"
+   :ctier===2?"Coach: pick XI + shape"
+   :"Coach: pick XI, shape + tactics";
  xc.appendChild($(`<div class="row"><h3 style="font-size:15px">Starting XI</h3>
-   <button class="btn sm sec">Auto-pick</button></div>`));
- xc.querySelector("button").onclick=()=>{G.xi=autoXI(userTeamObj(),G.formation).map(p=>p.id);render()};
+   <button class="btn sm ${ctier===0?'sec':''}">${clabel}</button></div>`));
+ xc.querySelector("button").onclick=()=>{
+   if(ctier===0)return toast("Hire a head coach in the Office to unlock auto pick.");
+   coachAutoSetup();
+ };
+ if(ctier>0)xc.appendChild($(`<div class="small muted" style="margin-bottom:6px">${coachInfo().label} \u00B7 ${coachInfo().desc}</div>`));
  const slots=slotList(G.formation);
  const used=new Set(G.xi);
  slots.forEach((pos,idx)=>{
@@ -1935,6 +2075,27 @@ function viewOffice(w){
 
  // scouting department (tiered)
  const scc=$(`<div class="card"></div>`);
+ const cc=$(`<div class="card"></div>`);
+ cc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Head coach</h3>`));
+ cc.appendChild($(`<div class="small muted" style="margin-bottom:8px">Current: <b class="gold">${coachInfo().label}</b>${coachInfo().wage?` \u00B7 ${money(coachInfo().wage)}/wk`:""}${coachInfo().boost?` \u00B7 +${coachInfo().boost.toFixed(1)} match boost`:""}</div>`));
+ COACH_TIERS.forEach((ct,i)=>{
+   if(i===0)return;
+   const active=coachTier()===i;
+   const row=$(`<div class="teampick" style="margin-bottom:4px">
+     <div><b>${ct.label}</b> <span class="small muted">${money(ct.wage)}/wk</span>
+     <div class="small muted">${ct.desc}</div></div>
+     <span class="badge-lg">${active?"Employed":coachTier()>i?"\u2713":"Hire"}</span></div>`);
+   if(!active)row.onclick=()=>{G.coachTier=i;
+     logAdd(`${ct.label} appointed.`);saveGame(true);render()};
+   cc.appendChild(row);
+ });
+ if(coachTier()>0){
+   const dis=$(`<button class="btn sm sec" style="margin-top:6px">Dismiss coach</button>`);
+   dis.onclick=()=>{G.coachTier=0;saveGame(true);render()};
+   cc.appendChild(dis);
+ }
+ w.appendChild(cc);
+
  scc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Scouting department</h3>
    <div class="small muted" style="margin-bottom:8px">A better scout hires for more per week but makes scouting rival squads far cheaper, and reveals potential. Current: <b class="gold">${scoutInfo().label}</b> \u00B7 reveal cost ${money(scoutInfo().cost)}/club/season.</div>`));
  [["gold","Gold"],["silver","Silver"],["bronze","Bronze"]].forEach(([key,lab])=>{
