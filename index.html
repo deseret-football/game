@@ -197,7 +197,7 @@ const SCOUT_TIERS={   // roster reveal cost per club, resets each season
 const XFER_PER_OVR=1000000;
 const REGION_CUP={deseret:"The Liahona Cup",kauai:"The Napali Cup",founders:"The Brainrot Cup"};
 function cupName(regionKey){return REGION_CUP[regionKey||userRegionKey()]||"Regional Cup";}
-Object.defineProperty(globalThis,"CUP",{get(){return G&&G.userTeam!=null?cupName(userRegionKey()):"Regional Cup"}});
+Object.defineProperty(globalThis,"CUP",{get(){try{return G&&G.userTeam!=null?cupName(userRegionKey()):"Regional Cup"}catch(e){return "Regional Cup"}}});
 const CONT_CUP="The Conrad Cup";
 const WORLD_CUP="The World Cup";
 const SEASON_LEN=18;                      // 10-club double round-robin
@@ -526,76 +526,169 @@ function loadGame(){
  try{const raw=localStorage.getItem(SAVE_KEY);if(!raw)return false;
    const g=JSON.parse(raw);if(!g)return false;
    if(g.ver!==4)return false;       // pre-region saves cannot be migrated; start fresh
-   G=g;rebuildIndex();
-   // club names always come from code, so renames apply to existing saves
-   // reapply club names from code so future renames stick to existing saves
-   G.teams.forEach(t=>{const list=REGION_CLUBS[t.region];const i=G._clubIdx&&G._clubIdx[t.id];
-     if(list&&typeof i==="number"&&list[i])t.name=list[i];});
-   // expansion clubs are stored by name, so renames need an explicit map
-   {const RN={"Shiloh Town":"FC Red Rocks","Jacobugath FC":"Handcart Athletic",
-      "Gimgimno Rovers":"Grid City","Ramah Athletic":"Real Brigham",
-      "Mulek United":"Arches City","Antionum FC":"Temple FC","Caminini Bikini":"Tabernacle FC",
-      "Angry Bippi":"Salt City","Fluffy Tippi FC":"Snow United"};
-    (G.expansion||[]).forEach(e=>{if(RN[e.name])e.name=RN[e.name]});
-    G.teams.forEach(t=>{if(RN[t.name])t.name=RN[t.name]});}
-   if(!G.results)G.results=[];
-   if(!G.cups)G.cups={regional:[],continental:[],world:[]};
-   if(!G.news)G.news=[];
-   if(G.wcYearsLeft==null)G.wcYearsLeft=4;
-   if(!G.refused)G.refused={};
-   if(G.myStaff&&G.myStaff.coach){
-     if(G.coachTier==null&&G.coach===undefined)G.coachTier=Math.min(3,Math.max(1,Math.round(G.myStaff.coach.stars/2)));
-     delete G.myStaff.coach;}                                     // ghost from any path
-   // migrate tier-only coaches (pre-individuals) into a named person + market
-   if(!G.coachPool){
-     if(G.nextCoachId==null)G.nextCoachId=1000;
-     const old=Math.max(0,Math.min(3,G.coachTier||0));
-     G.coach=null;
-     if(old>0){
-       const c=genCoach(G.nextCoachId++);
-       c.tier=old;c.wage=coachWage(old,c.age);c.club=null;
-       c.prestigeReq=old===1?0:old===2?ri(10,24):ri(30,55);
-       G.coach={id:c.id,name:c.name,age:c.age,tier:c.tier,trait:c.trait,
-         wage:c.wage,prestigeReq:c.prestigeReq,contract:2};
-       G.log.unshift({s:G.season,md:G.matchday,
-         text:`Your ${COACH_TIERS[old].label} now has a name: ${c.name}, a ${COACH_TRAITS[c.trait].label.toLowerCase()} on a 2-year deal.`,amt:0});
-     }
-     G.coachPool=genCoachPool();
-     delete G.coachTier;
-   }
-   if(G.coach===undefined)G.coach=null;
-   if(G.coachAuto==null)G.coachAuto=true;   // hiring a coach means delegating to him
-   G.staffPool=(G.staffPool||[]).filter(s=>!!STAFF_ROLES[s.role]); // drop orphaned roles
-   G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
-     if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
-     if(!t.trait)t.trait=assignTrait(t.tier);});
-   G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0;p.gbWins=p.gbWins||0});
-   // migrate keepers from the old shared six to dedicated keeper metrics,
-   // preserving OVR: seed each new metric near the old rating, then recompute.
-   G.players.forEach(p=>{
-     if(p.pos==="GK"&&p.reflexes===undefined){
-       const o=clamp(Math.round(p.ovr||calcOvr(p)),18,99);
-       GK_ATTRS.forEach(a=>p[a]=clamp(o+ri(-4,4),18,99));
-       OUTFIELD_ATTRS.forEach(a=>{if(a in p)delete p[a];});
-       setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
-     }
-   });
-   // seed frozen club scorer records so departed legends persist (Update 4)
-   G.teams.forEach(t=>{if(!t.scorers){t.scorers={};
-     squadOf(t).forEach(p=>{if(p&&(p.gc||0)>0)t.scorers[p.id]={name:p.name,pos:p.pos,goals:p.gc};});}});
-   if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
-   if(!G.window)G.window={day:4,offersMade:0};
-   if(!G.offers)G.offers=[];
-   if(G.userTeam!==null&&!G.teams.find(t=>t.id===G.userTeam)){
-     const reg=userRegionKeySafe();
-     const low=G.teams.filter(t=>t.region===reg&&t.tier===2).sort((a,b)=>
-       squadOf(a).reduce((s,p)=>s+p.ovr,0)-squadOf(b).reduce((s,p)=>s+p.ovr,0));
-     G.userTeam=low.length?low[0].id:G.teams[0].id;
-   }
-   return true;}
+   G=g;hydrateLoadedG();return true;}
  catch(e){return false;}
 }
+function hydrateLoadedG(){
+ // Runs the full migration/repair pass on an already-assigned G, whether it
+ // came from disk (loadGame) or an imported file (importSaveText). Keeping this
+ // in one place means an imported save gets exactly the same treatment as a
+ // loaded one — no second, drifting code path.
+ rebuildIndex();
+ // club names always come from code, so renames apply to existing saves
+ // reapply club names from code so future renames stick to existing saves
+ G.teams.forEach(t=>{const list=REGION_CLUBS[t.region];const i=G._clubIdx&&G._clubIdx[t.id];
+   if(list&&typeof i==="number"&&list[i])t.name=list[i];});
+ // expansion clubs are stored by name, so renames need an explicit map
+ {const RN={"Shiloh Town":"FC Red Rocks","Jacobugath FC":"Handcart Athletic",
+    "Gimgimno Rovers":"Grid City","Ramah Athletic":"Real Brigham",
+    "Mulek United":"Arches City","Antionum FC":"Temple FC","Caminini Bikini":"Tabernacle FC",
+    "Angry Bippi":"Salt City","Fluffy Tippi FC":"Snow United"};
+  (G.expansion||[]).forEach(e=>{if(RN[e.name])e.name=RN[e.name]});
+  G.teams.forEach(t=>{if(RN[t.name])t.name=RN[t.name]});}
+ if(!G.results)G.results=[];
+ if(!G.cups)G.cups={regional:[],continental:[],world:[]};
+ if(!G.news)G.news=[];
+ if(G.wcYearsLeft==null)G.wcYearsLeft=4;
+ if(!G.refused)G.refused={};
+ if(G.myStaff&&G.myStaff.coach){
+   if(G.coachTier==null&&G.coach===undefined)G.coachTier=Math.min(3,Math.max(1,Math.round(G.myStaff.coach.stars/2)));
+   delete G.myStaff.coach;}                                     // ghost from any path
+ // migrate tier-only coaches (pre-individuals) into a named person + market
+ if(!G.coachPool){
+   if(G.nextCoachId==null)G.nextCoachId=1000;
+   const old=Math.max(0,Math.min(3,G.coachTier||0));
+   G.coach=null;
+   if(old>0){
+     const c=genCoach(G.nextCoachId++);
+     c.tier=old;c.wage=coachWage(old,c.age);c.club=null;
+     c.prestigeReq=old===1?0:old===2?ri(10,24):ri(30,55);
+     G.coach={id:c.id,name:c.name,age:c.age,tier:c.tier,trait:c.trait,
+       wage:c.wage,prestigeReq:c.prestigeReq,contract:2};
+     G.log.unshift({s:G.season,md:G.matchday,
+       text:`Your ${COACH_TIERS[old].label} now has a name: ${c.name}, a ${COACH_TRAITS[c.trait].label.toLowerCase()} on a 2-year deal.`,amt:0});
+   }
+   G.coachPool=genCoachPool();
+   delete G.coachTier;
+ }
+ if(G.coach===undefined)G.coach=null;
+ if(G.coachAuto==null)G.coachAuto=true;   // hiring a coach means delegating to him
+ G.staffPool=(G.staffPool||[]).filter(s=>!!STAFF_ROLES[s.role]); // drop orphaned roles
+ G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
+   if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
+   if(!t.trait)t.trait=assignTrait(t.tier);});
+ G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0;p.gbWins=p.gbWins||0});
+ // migrate keepers from the old shared six to dedicated keeper metrics,
+ // preserving OVR: seed each new metric near the old rating, then recompute.
+ G.players.forEach(p=>{
+   if(p.pos==="GK"&&p.reflexes===undefined){
+     const o=clamp(Math.round(p.ovr||calcOvr(p)),18,99);
+     GK_ATTRS.forEach(a=>p[a]=clamp(o+ri(-4,4),18,99));
+     OUTFIELD_ATTRS.forEach(a=>{if(a in p)delete p[a];});
+     setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
+   }
+ });
+ // seed frozen club scorer records so departed legends persist (Update 4)
+ G.teams.forEach(t=>{if(!t.scorers){t.scorers={};
+   squadOf(t).forEach(p=>{if(p&&(p.gc||0)>0)t.scorers[p.id]={name:p.name,pos:p.pos,goals:p.gc};});}});
+ if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
+ if(!G.window)G.window={day:4,offersMade:0};
+ if(!G.offers)G.offers=[];
+ if(G.userTeam!==null&&!G.teams.find(t=>t.id===G.userTeam)){
+   const reg=userRegionKeySafe();
+   const low=G.teams.filter(t=>t.region===reg&&t.tier===2).sort((a,b)=>
+     squadOf(a).reduce((s,p)=>s+p.ovr,0)-squadOf(b).reduce((s,p)=>s+p.ovr,0));
+   G.userTeam=low.length?low[0].id:G.teams[0].id;
+ }
+}
 function wipeSave(){try{localStorage.removeItem(SAVE_KEY)}catch(e){}}
+
+/* ---- portable backups: export/import the whole career as a .json file ----
+   localStorage on the open web is fragile (Safari evicts unused site data,
+   "clear browsing data" wipes it). A downloadable/shareable backup is a durable
+   copy the player physically owns and can move between devices. */
+function saveFileName(){
+ const club=(userTeamObj()&&userTeamObj().name||"empire-fc").toLowerCase()
+   .replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"club";
+ return `empire-fc-${club}-s${G.season}.json`;
+}
+function downloadBlob(blob,fname){
+ try{
+   const url=URL.createObjectURL(blob);
+   const a=document.createElement("a");
+   a.href=url;a.download=fname;a.style.display="none";
+   document.body.appendChild(a);a.click();
+   setTimeout(()=>{try{URL.revokeObjectURL(url);a.remove();}catch(e){}},1500);
+   toast("Backup downloaded. Keep it somewhere safe.");
+ }catch(e){toast("Could not create the backup file.");}
+}
+function exportSave(){
+ if(!G||G.userTeam==null)return toast("Start or load a game before exporting.");
+ saveGame(true);                       // make sure the on-disk copy is current first
+ const fname=saveFileName();
+ let json;try{json=JSON.stringify(G);}catch(e){return toast("Could not serialize the save.");}
+ const blob=new Blob([json],{type:"application/json"});
+ // On mobile, prefer the native share sheet so the player can send the backup
+ // to themselves (AirDrop, Messages, iCloud, Drive) in one gesture. Fall back
+ // to a plain download on desktop or where sharing files isn't supported.
+ let file=null;try{file=new File([blob],fname,{type:"application/json"});}catch(e){}
+ if(file&&navigator.canShare&&navigator.canShare({files:[file]})&&navigator.share){
+   navigator.share({files:[file],title:"Empire FC save",
+     text:`Empire FC backup \u2014 ${userTeamObj().name}, Season ${G.season}`})
+     .then(()=>toast("Backup shared. Keep it somewhere safe."))
+     .catch(err=>{if(!err||err.name!=="AbortError")downloadBlob(blob,fname);});
+   return;
+ }
+ downloadBlob(blob,fname);
+}
+function importSaveText(text){
+ // Validate hard, then run the SAME hydrate path as a disk load. Returns
+ // {ok:true} or {ok:false,msg}. Never eval; only JSON.parse. On any failure the
+ // previous game is left untouched.
+ let g;
+ try{g=JSON.parse(text);}
+ catch(e){return{ok:false,msg:"That file isn't valid JSON \u2014 not an Empire FC save."};}
+ if(!g||typeof g!=="object")return{ok:false,msg:"That file isn't an Empire FC save."};
+ if(g.ver!==4)return{ok:false,msg:"That save is from an incompatible version and can't be loaded."};
+ if(!Array.isArray(g.teams)||!g.teams.length||!Array.isArray(g.players)||!g.players.length||g.userTeam==null)
+   return{ok:false,msg:"That save is missing core data and looks corrupted."};
+ delete g._goat;                       // pure cache, rebuilt on demand
+ const backup=G;
+ try{
+   G=g;hydrateLoadedG();
+   if(!userTeamObj()){G=backup;if(backup)rebuildIndex();return{ok:false,msg:"That save's club is missing and it can't be loaded."};}
+ }catch(e){
+   G=backup;if(backup)rebuildIndex();
+   return{ok:false,msg:"That save couldn't be loaded \u2014 it may be corrupted."};
+ }
+ saveGame(true);
+ return{ok:true};
+}
+function triggerImport(onDone){
+ // opens the system file picker filtered to JSON; reads and imports the choice
+ const inp=document.createElement("input");
+ inp.type="file";inp.accept="application/json,.json";inp.style.display="none";
+ inp.onchange=()=>{
+   const f=inp.files&&inp.files[0];
+   try{inp.remove();}catch(e){}
+   if(!f)return;
+   const reader=new FileReader();
+   reader.onload=()=>{
+     const res=importSaveText(String(reader.result||""));
+     if(res.ok){toast("Save imported.");(onDone||render)();}
+     else toast(res.msg);
+   };
+   reader.onerror=()=>toast("Couldn't read that file.");
+   reader.readAsText(f);
+ };
+ document.body.appendChild(inp);inp.click();
+}
+function doImport(){
+ // confirm only when a real career is in progress (not on the fresh start world)
+ const active=G&&G.userTeam!=null;
+ if(active&&!confirm("Import a backup? This replaces your current career."))return;
+ triggerImport(()=>{TAB="club";render();});
+}
 
 /* ======================= MATCH ENGINE ======================= */
 function fit(list){return list.filter(p=>p.inj<=0&&(p.susp||0)<=0);}
@@ -2145,8 +2238,13 @@ function renderStart(){
    const cont=$(`<button class="btn" style="margin-bottom:10px">Continue saved game</button>`);
    cont.onclick=()=>{if(loadGame()&&G.userTeam!==null){TAB="club";render()}else toast("No valid save found.")};
    s.appendChild(cont);
-   s.appendChild($(`<div class="divider"></div>`));
  }
+ // Import is always available here: if the browser save was wiped, a player can
+ // recover straight from a backup file without starting a new world first.
+ {const impb=$(`<button class="btn sec" style="margin-bottom:10px">Import a backup</button>`);
+  impb.onclick=()=>doImport();
+  s.appendChild(impb);
+  s.appendChild($(`<div class="divider"></div>`));}
 
  s.appendChild($(`<div class="lbl" style="margin-bottom:6px">Your name, President</div>`));
  const nameIn=$(`<input type="text" maxlength="24" placeholder="e.g. Drew" value="${G&&G.owner!=="President"?G.owner:""}">`);
@@ -2967,6 +3065,15 @@ function viewOffice(w){
  const sv=$(`<button class="btn" style="margin-bottom:8px">Save now</button>`);
  sv.onclick=()=>saveGame(false);
  sc.appendChild(sv);
+ sc.appendChild($(`<div class="divider"></div>`));
+ sc.appendChild($(`<div class="small muted" style="margin-bottom:8px">Download a backup you can keep or move to another device. Clearing site data \u2014 and Safari's automatic cleanup \u2014 can erase the browser save, so export now and then.</div>`));
+ const exp=$(`<button class="btn" style="margin-bottom:8px">Export backup</button>`);
+ exp.onclick=()=>exportSave();
+ sc.appendChild(exp);
+ const imp=$(`<button class="btn sec" style="margin-bottom:8px">Import backup</button>`);
+ imp.onclick=()=>doImport();
+ sc.appendChild(imp);
+ sc.appendChild($(`<div class="divider"></div>`));
  const del=$(`<button class="btn sec">Delete save and start over</button>`);
  del.onclick=()=>{if(confirm("Delete your save and start a new game?")){wipeSave();G=null;renderStart()}};
  sc.appendChild(del);
