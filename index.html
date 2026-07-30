@@ -99,7 +99,7 @@
   .abar{height:8px;background:var(--night2);border-radius:4px;overflow:hidden;flex:1;margin:0 8px}
   .abar>div{height:100%;background:linear-gradient(90deg,var(--grana),var(--honey))}
   .arow{display:flex;align-items:center;font-size:11px;margin:6px 0}
-  .arow .al{width:74px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+  .arow .al{width:86px;white-space:nowrap;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
   .arow .av{width:26px;text-align:right;font-weight:700}
   .toastbox{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);z-index:20;
     display:flex;flex-direction:column;align-items:center;gap:8px;width:max-content;max-width:92vw;pointer-events:none}
@@ -365,13 +365,20 @@ const STAFF_ROLES={
 const STAFF_WAGE=[0,2000,5000,10000,18000,30000]; // by stars
 
 /* ---- attribute + rating helpers ---- */
+/* Outfielders and keepers are rated on entirely separate metrics. A keeper's
+   game has nothing to do with pace or shooting, so he gets his own six. The
+   match engine reads only p.ovr and position, so these feed rating, growth and
+   the player card — not the simulation directly. */
+const OUTFIELD_ATTRS=["pace","shooting","passing","defending","physical","technique"];
+const GK_ATTRS=["reflexes","handling","positioning","aerial","kicking","command"];
+function attrsFor(pos){return pos==="GK"?GK_ATTRS:OUTFIELD_ATTRS;}
 const TILT={
- GK:{pace:-22,shooting:-26,passing:-8,defending:12,physical:6,technique:-4},
+ GK:{reflexes:0,handling:0,positioning:0,aerial:0,kicking:0,command:0},
  DEF:{pace:2,shooting:-16,passing:-2,defending:15,physical:9,technique:-5},
  MID:{pace:2,shooting:-2,passing:11,defending:-2,physical:-3,technique:9},
  FWD:{pace:9,shooting:15,passing:-2,defending:-18,physical:-3,technique:7}};
 const OVR_W={
- GK:{defending:.42,physical:.24,technique:.19,passing:.15},
+ GK:{reflexes:.34,positioning:.24,handling:.20,aerial:.12,kicking:.06,command:.04},
  DEF:{defending:.4,physical:.24,pace:.15,passing:.11,technique:.1},
  MID:{passing:.3,technique:.26,defending:.14,physical:.15,pace:.15},
  FWD:{shooting:.35,pace:.25,technique:.2,passing:.1,physical:.1}};
@@ -384,7 +391,7 @@ for(const _pos in OVR_W){let _b=0;
  for(const _k in OVR_W[_pos])_b+=(TILT[_pos][_k]||0)*OVR_W[_pos][_k];
  TILT_BIAS[_pos]=_b;}
 function setOvr(p){p.ovr=Math.min(calcOvr(p),p.pot);return p.ovr;}
-const ATTRS=["pace","shooting","passing","defending","physical","technique"];
+const ATTRS=OUTFIELD_ATTRS;   // alias kept for outfield-only call sites
 
 function ovrFromAge(pot,age){
  const peak=27;let f;
@@ -394,7 +401,7 @@ function ovrFromAge(pot,age){
 function calcOvr(p){let o=0;for(const k in OVR_W[p.pos])o+=p[k]*OVR_W[p.pos][k];return Math.round(o);}
 function makeAttrs(p){
  const base=ovrFromAge(p.pot,p.age)-(TILT_BIAS[p.pos]||0),t=TILT[p.pos];
- for(const a of ATTRS)p[a]=clamp(Math.round(base+t[a]+rnd(-6,6)),18,99);
+ for(const a of attrsFor(p.pos))p[a]=clamp(Math.round(base+t[a]+rnd(-6,6)),18,99);
  setOvr(p);}
 function valueOf(p){
  let v=Math.pow(p.ovr/100,3)*42e6;
@@ -563,6 +570,19 @@ function loadGame(){
      if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
      if(!t.trait)t.trait=assignTrait(t.tier);});
    G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0;p.gbWins=p.gbWins||0});
+   // migrate keepers from the old shared six to dedicated keeper metrics,
+   // preserving OVR: seed each new metric near the old rating, then recompute.
+   G.players.forEach(p=>{
+     if(p.pos==="GK"&&p.reflexes===undefined){
+       const o=clamp(Math.round(p.ovr||calcOvr(p)),18,99);
+       GK_ATTRS.forEach(a=>p[a]=clamp(o+ri(-4,4),18,99));
+       OUTFIELD_ATTRS.forEach(a=>{if(a in p)delete p[a];});
+       setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
+     }
+   });
+   // seed frozen club scorer records so departed legends persist (Update 4)
+   G.teams.forEach(t=>{if(!t.scorers){t.scorers={};
+     squadOf(t).forEach(p=>{if(p&&(p.gc||0)>0)t.scorers[p.id]={name:p.name,pos:p.pos,goals:p.gc};});}});
    if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
    if(!G.window)G.window={day:4,offersMade:0};
    if(!G.offers)G.offers=[];
@@ -763,12 +783,17 @@ function traitOf(t){return t&&t.trait?CLUB_TRAITS[t.trait]:null;}
 const SCORE_W={GK:.01,DEF:.25,MID:1,FWD:2.2};
 function attributeGoals(xi,n){
  const scorers=[];
- const w=xi.map(p=>SCORE_W[p.pos]*(p.shooting+p.technique*.4));
+ const w=xi.map(p=>p.pos==="GK"?SCORE_W.GK*4:SCORE_W[p.pos]*(p.shooting+p.technique*.4));
  const tot=w.reduce((a,b)=>a+b,0);
  for(let g=0;g<n;g++){
    let r=Math.random()*tot;let k=0;
    while(r>w[k]&&k<w.length-1){r-=w[k];k++}
    const p=xi[k];p.gs=(p.gs||0)+1;p.gc=(p.gc||0)+1;scorers.push(p.name);
+   // credit the club he plays for now; the tally stays frozen once he leaves,
+   // so a rising youngster can one day overtake a departed legend
+   if(p.team!=null){const cl=T(p.team);if(cl){if(!cl.scorers)cl.scorers={};
+     const e=cl.scorers[p.id]||(cl.scorers[p.id]={name:p.name,pos:p.pos,goals:0});
+     e.goals++;e.name=p.name;}}
  }
  return scorers;
 }
@@ -893,6 +918,22 @@ function repOf(t){
 function effCapacity(t){
  // during construction the club uses a temporary ground at ~55% capacity
  return (t.building>0)?Math.round(t.capacity*0.55):t.capacity;}
+function universeGoatId(){
+ // the single best midfielder alive: OVR first, then career goals, apps, id.
+ // Memoized per matchday so attendance/preview calls stay cheap.
+ const key=G.season+"-"+G.matchday;
+ if(G._goat&&G._goat.key===key)return G._goat.id;
+ let best=null;
+ for(const p of G.players){
+   if(p.pos!=="MID")continue;
+   if(!best||p.ovr>best.ovr
+     ||(p.ovr===best.ovr&&((p.gc||0)>(best.gc||0)
+       ||((p.gc||0)===(best.gc||0)&&((p.ac||0)>(best.ac||0)
+         ||((p.ac||0)===(best.ac||0)&&p.id<best.id))))))best=p;
+ }
+ G._goat={key,id:best?best.id:null};
+ return G._goat.id;
+}
 function bootRace(){
  // the division's top 5 scorers, the names fans travel to see
  const ureg=userRegionKey(),tier=userTeamObj().tier;
@@ -903,8 +944,13 @@ function attendanceFactors(t,oppId,cupStage){
  // Base: reputation and ticket price, as before
  const rep=repOf(t);
  let demand=clamp(.42+rep*.45-(G.ticketPrice-25)*.012,.10,1);
- const f={base:demand,boot:0,prestige:0,form:0,cup:0,stars:[]};
+ const f={base:demand,boot:0,goat:0,prestige:0,form:0,cup:0,stars:[],goatName:null};
  const opp=oppId!=null?T(oppId):null;
+ // The GOAT: the single best midfielder in the world is a bigger draw than the
+ // Golden Boot race (whose boost caps at +18%). Fans pack in on either side.
+ {const gid=universeGoatId();
+  if(gid!=null&&((squadOf(t).some(p=>p.id===gid))||(opp&&squadOf(opp).some(p=>p.id===gid)))){
+    f.goat=.22;const gp=P(gid);f.goatName=gp?gp.name:null;}}
  // Golden Boot draw: fans come out for the division's top scorers, on either side
  if(G.matchday>2){
    const race=bootRace();
@@ -923,7 +969,7 @@ function attendanceFactors(t,oppId,cupStage){
  if(rank>0)f.form=((PER_TIER/2)-rank)*.018;   // +7% top, -8% bottom
  // Cup knockouts: the later the round, the bigger the occasion
  if(cupStage!=null)f.cup=[.06,.12,.20,.30][Math.min(cupStage,3)]||0;
- const total=clamp(demand+f.boot+f.prestige+f.form+f.cup,.08,1);
+ const total=clamp(demand+f.boot+f.goat+f.prestige+f.form+f.cup,.08,1);
  f.total=total;
  return f;
 }
@@ -1676,7 +1722,7 @@ function awardXP(p,amt){
  // development is for young players: veterans gain nothing from a deep run
  if(p.age>26)return;
  const scaled=Math.min(WC_XP_CAP,Math.ceil(amt/2));
- let left=scaled;const order=shuffle(ATTRS.slice());
+ let left=scaled;const order=shuffle(attrsFor(p.pos).slice());
  for(const a of order){if(left<=0)break;const add=Math.min(left,1);p[a]=clamp(p[a]+add,18,99);left-=add;}
  setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
 }
@@ -1735,17 +1781,18 @@ function ageAndRenew(){
    const prev=ovrFromAge(p.pot,Math.min(Math.max(p.age-1,16),40));
    const target=ovrFromAge(p.pot,Math.min(p.age,40));
    const scale=target/Math.max(1,prev);
-   ATTRS.forEach(a=>p[a]=clamp(Math.round(p[a]*scale+rnd(-1,1)),18,99));
+   const _at=attrsFor(p.pos);
+   _at.forEach(a=>p[a]=clamp(Math.round(p[a]*scale+rnd(-1,1)),18,99));
    // youth coach: extra growth for user's under-23s
    if(youthStars&&p.team===G.userTeam&&p.age<23)
-     ATTRS.forEach(a=>p[a]=clamp(p[a]+ri(0,Math.ceil(youthStars/2)),18,99));
+     _at.forEach(a=>p[a]=clamp(p[a]+ri(0,Math.ceil(youthStars/2)),18,99));
    // a Youth developer head coach compounds it: this season for the next three
    if(G.coach&&G.coach.trait==="youth"&&p.team===G.userTeam&&p.age<23)
-     ATTRS.forEach(a=>p[a]=clamp(p[a]+ri(0,2),18,99));
+     _at.forEach(a=>p[a]=clamp(p[a]+ri(0,2),18,99));
    // youth academy clubs develop their own prospects faster
    const _c=p.team!=null?T(p.team):null;
    if(_c&&_c.trait==="youth"&&_c.id!==G.userTeam&&p.age<23)
-     ATTRS.forEach(a=>p[a]=clamp(p[a]+ri(0,2),18,99));
+     _at.forEach(a=>p[a]=clamp(p[a]+ri(0,2),18,99));
    setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
    if(p.age>40)retiring.push(p);
  });
@@ -1899,6 +1946,13 @@ function transferFee(p){
  }
  return Math.max(500000,Math.round(base*mult/100000)*100000);
 }
+function squadCapNotice(){
+ // fired right after a signing lands: explains why the market is about to lock
+ if(userTeamObj().squad.length>=30){
+   logAdd("Squad now has 30 players \u2014 the maximum. Sell or release someone before signing again.");
+   toast("You now have 30 players, the squad limit. Sell or release before signing again.");
+ }
+}
 function buyPlayer(p){
  const t=userTeamObj();
  if(!inWindow())return toast("Trades only happen in the pre-season window.");
@@ -1907,7 +1961,7 @@ function buyPlayer(p){
  const fee=transferFee(p);
  if(inTheRed())return toast("Signings are frozen while the club is in the red.");
  if(t.budget<fee)return toast(`Need ${money(fee)} for this transfer.`);
- if(t.squad.length>=30)return toast("Squad is full (30 max).");
+ if(t.squad.length>=30)return toast("Squad is full (30 max). Sell or release a player to make room.");
  const seller=T(p.team);
  // a club can simply refuse. Once they do, that player is off the market
  // until next season, so you cannot keep asking.
@@ -1931,7 +1985,7 @@ function buyPlayer(p){
  p.team=t.id;t.squad.push(p.id);
  G.window.offersMade++;
  logAdd(`Signed ${p.name} from ${seller.name} for ${money(fee)}.`,-fee);
- toast(`Signed ${p.name} for ${money(fee)}.`);saveGame(true);render();
+ toast(`Signed ${p.name} for ${money(fee)}.`);squadCapNotice();saveGame(true);render();
 }
 function genOffers(){
  // AI bids for your best players, one batch per window day
@@ -2001,7 +2055,7 @@ function showPlayer(id){
  const owned=p.team===G.userTeam;
  const hasScout=(G.scoutTier!=null);
  const club=p.team===null?"Free agent":T(p.team).name;
- const bars=ATTRS.map(a=>`<div class="arow"><span class="al">${a}</span><span class="abar"><div style="width:${p[a]}%"></div></span><span class="av">${p[a]}</span></div>`).join("");
+ const bars=attrsFor(p.pos).map(a=>`<div class="arow"><span class="al">${a}</span><span class="abar"><div style="width:${p[a]}%"></div></span><span class="av">${p[a]}</span></div>`).join("");
  const ov=$(`<div class="overlay"></div>`);
  ov.appendChild($(`<div class="pcard">
    <div class="row"><div><h3 style="font-size:17px">${p.name}${p.age>=40?'<span class="ret">R</span>':''}</h3>
@@ -2146,6 +2200,24 @@ function trophyCard(t){
    c.appendChild($(`<div class="small muted center" style="margin-top:6px">No silverware yet. Win a division, the cup, or the ${CONT_CUP} to fill the cabinet.</div>`));
  return c;
 }
+function clubLegendsCard(t,title){
+ // frozen per-club scorer record: a player's tally stops the day he leaves,
+ // so youngsters chase the legends who came before them
+ const rec=t.scorers||{};
+ const onSquad=new Set(t.squad);
+ const rows=Object.keys(rec).map(id=>{const e=rec[id];const pid=+id;const live=P(pid);
+   return{pid,name:(live&&live.name)||e.name,pos:e.pos,goals:e.goals,here:onSquad.has(pid)};})
+   .filter(e=>e.goals>0).sort((a,b)=>b.goals-a.goals).slice(0,5);
+ const c=$(`<div class="card"></div>`);
+ c.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">${title}</h3>`));
+ if(!rows.length){c.appendChild($(`<div class="small muted">No goals recorded yet.</div>`));return c;}
+ const body=rows.map((e,i)=>`<tr><td class="l muted">${i+1}</td>`+
+   `<td class="l">${e.here?`<span class="pname" data-p="${e.pid}">${e.name}</span>`:`<span>${e.name}</span> <span class="small muted">\u00B7 former</span>`}</td>`+
+   `<td class="l small muted">${e.pos}</td><td class="gold"><b>${e.goals}</b></td></tr>`).join("");
+ const tb=$(`<table><thead><tr><th class="l">#</th><th class="l">Player</th><th class="l"></th><th>For club</th></tr></thead><tbody>${body}</tbody></table>`);
+ wireNames(tb);c.appendChild(tb);
+ return c;
+}
 function goalLeaderCard(playerList,title){
  const top=playerList.filter(p=>(p.gc||0)>0).sort((a,b)=>b.gc-a.gc).slice(0,3);
  const c=$(`<div class="card"></div>`);
@@ -2211,7 +2283,7 @@ function viewClub(w){
 
  // trophies + all-time goal leaders
  w.appendChild(trophyCard(t));
- w.appendChild(goalLeaderCard(squadOf(t),"Your club's top scorers (career)"));
+ w.appendChild(clubLegendsCard(t,"Club goalscoring record"));
 
  // Clear priority: window first, then in-season play, then season-end advance.
  if(inWindow()){
@@ -2664,11 +2736,11 @@ function signPlayer(p){
  const t=userTeamObj();
  if(inTheRed())return toast("Signings are frozen while the club is in the red.");
  if(t.budget<p.value)return toast("Not enough in the budget.");
- if(t.squad.length>=30)return toast("Squad is full (30 max).");
+ if(t.squad.length>=30)return toast("Squad is full (30 max). Sell or release a player to make room.");
  t.budget-=p.value;G.freeAgents=G.freeAgents.filter(x=>x!==p.id);
  p.team=t.id;t.squad.push(p.id);
  logAdd(`Signed ${p.name}.`,-p.value);
- toast(`Signed ${p.name} for ${money(p.value)}.`);saveGame(true);render();
+ toast(`Signed ${p.name} for ${money(p.value)}.`);squadCapNotice();saveGame(true);render();
 }
 function releasePlayer(p){
  const t=userTeamObj();
@@ -2726,6 +2798,7 @@ function viewOffice(w){
        <div class="stat"><div class="lbl">Demand</div><div style="font-weight:800;font-size:16px" class="${surgeCls}">${mkt.surge>=0?"+":""}${mkt.surge}%</div></div>
      </div>`));
      const lines=[];
+     if(f.goat>0)lines.push(`The GOAT draws the crowd ${pct(f.goat)}${f.goatName?" ("+f.goatName+")":""}`);
      if(f.boot>0)lines.push(`Golden Boot draw ${pct(f.boot)}${f.stars.length?" ("+f.stars.slice(0,2).join(", ")+")":""}`);
      if(Math.abs(f.prestige)>=.02)lines.push(`Prestige pull ${pct(f.prestige)}`);
      if(Math.abs(f.form)>=.02)lines.push(`League form ${pct(f.form)}`);
@@ -3119,7 +3192,7 @@ function viewWorldTeam(w,id){
    w.appendChild(tc);
  }
  w.appendChild(trophyCard(t));
- w.appendChild(goalLeaderCard(squadOf(t),"Top scorers (career)"));
+ w.appendChild(clubLegendsCard(t,"Club goalscoring record"));
 
  if(me){w.appendChild($(`<div class="card small muted center">This is your club. Manage it from the Squad and Market tabs.</div>`));return;}
 
