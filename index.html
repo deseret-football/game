@@ -284,7 +284,7 @@ function newPlayer(id,pos,age,regionKey){
  const rk=regionKey||pick(REGIONS).key;const nm=NAMES[rk];
  const p={id,name:pick(nm.first)+" "+pick(nm.last),pos,age,region:rk,nat:pick(COUNTRIES),
    pot:56+Math.floor(Math.pow(Math.random(),1.6)*43),team:null,inj:0,
-   gs:0,gc:0,as:0,ac:0,susp:0,wcWins:0,wcApps:0};
+   gs:0,gc:0,as:0,ac:0,susp:0,wcWins:0,wcApps:0,gbWins:0};
  makeAttrs(p);p.value=valueOf(p);p.wage=wageOf(p);return p;}
 
 function newStaff(id,role){
@@ -395,7 +395,7 @@ function loadGame(){
    G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
      if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
      if(!t.trait)t.trait=assignTrait(t.tier);});
-   G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0});
+   G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0;p.gbWins=p.gbWins||0});
    if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
    if(!G.window)G.window={day:4,offersMade:0};
    if(!G.offers)G.offers=[];
@@ -1122,9 +1122,24 @@ function endSeason(){
    });
  });
  rebuildTeamIndex();
+ // Golden Boot: one winner per region each season, awarded across all its
+ // divisions. Tracked permanently on the player as gbWins.
+ G._bootWinners=[];
+ REGIONS.forEach(r=>{
+   const scorers=G.players.filter(p=>p.team!==null&&T(p.team)&&T(p.team).region===r.key&&(p.gs||0)>0)
+     .sort((a,b)=>(b.gs||0)-(a.gs||0));
+   const w=scorers[0];if(!w)return;
+   w.gbWins=(w.gbWins||0)+1;
+   G._bootWinners.push({region:r.key,id:w.id,name:w.name,goals:w.gs,
+     club:T(w.team)?T(w.team).name:"a free agent",wins:w.gbWins});
+ });
  const boot=G.players.slice().sort((a,b)=>(b.gs||0)-(a.gs||0))[0];
  if(boot&&boot.gs>0){const club=boot.team!==null&&T(boot.team)?T(boot.team).name:"a free agent";
    logAdd(`Golden Boot: ${boot.name} (${club}) with ${boot.gs} goals.`);}
+ // the user's own region winner gets called out in the log
+ const mine=G._bootWinners.find(b=>b.region===ureg);
+ if(mine&&(!boot||mine.id!==boot.id))
+   logAdd(`${regionOf(ureg).name} Golden Boot: ${mine.name} (${mine.club}) with ${mine.goals}.`);
  G.history.push({season:G.season,tier:_playedTier,rank:_myRank,boot:boot?`${boot.name} (${boot.gs})`:"?",
    champ:RT[ureg][0][0].name,region:ureg,
    cup:G.cup&&G.cup.winner!==null?T(G.cup.winner).name:"—",
@@ -1206,13 +1221,15 @@ function generateNarratives(RT,ureg,boot,promoted,relegated){
    else if(wins%5===0)add(`${e.winner} win the ${cupN} for the ${wins}th time.`);
    else add(`${e.winner} win the ${cupN}.`);
  });
- // ── golden boot ─────────────────────────────────────────────────────────
- if(boot&&boot.gs>=20){
-   const club=boot.team!=null&&T(boot.team)?T(boot.team).name:"free agency";
-   if(boot.gs>=35)add(`${boot.name} shatters records with ${boot.gs} goals for ${club}!`);
-   else if(boot.gs>=28)add(`${boot.name} nets ${boot.gs} for ${club} \u2014 an incredible season.`);
-   else add(`${boot.name} takes the Golden Boot with ${boot.gs} goals for ${club}.`);
- }
+ // ── golden boot, per region, with career milestones ──────────────────────
+ (G._bootWinners||[]).forEach(b=>{
+   const rn=regionOf(b.region).name;
+   if(b.wins>=5)add(`${b.name} wins a ${ordinal(b.wins)} Golden Boot \u2014 ${b.goals} goals for ${b.club}. A legend of ${rn}.`);
+   else if(b.wins>1)add(`${b.name} claims the ${rn} Golden Boot again (\u00D7${b.wins}) with ${b.goals} for ${b.club}.`);
+   else if(b.goals>=35)add(`${b.name} shatters records with ${b.goals} goals for ${b.club}!`);
+   else if(b.goals>=28)add(`${b.name} nets ${b.goals} for ${b.club} \u2014 an incredible season.`);
+   else add(`${b.name} takes the ${rn} Golden Boot with ${b.goals} goals for ${b.club}.`);
+ });
  // ── promotions and relegations ────────────────────────────────────────────
  REGIONS.forEach(r=>{
    // dramatic bottom-of-table survival
@@ -1621,8 +1638,16 @@ function showPlayer(id){
  ov.appendChild($(`<div class="pcard">
    <div class="row"><div><h3 style="font-size:17px">${p.name}${p.age>=40?'<span class="ret">R</span>':''}</h3>
      <div class="small muted">${club} \u00B7 <span class="pos ${p.pos}">${p.pos}</span> \u00B7 ${p.age}y \u00B7 ${p.nat||"?"}</div>
-     ${p.wcWins>0?`<div class="small gold" style="margin-top:2px">\u2691 WC winner \u00D7${p.wcWins}${p.wcApps>0?" \u00B7 "+p.wcApps+" WC apps":""}</div>`:
-       p.wcApps>0?`<div class="small muted" style="margin-top:2px">\u2691 ${p.wcApps} World Cup app${p.wcApps>1?"s":""}</div>`:""}
+     ${(()=>{
+       const badges=[];
+       if(p.gbWins>0)badges.push(`\u26BD GB Winner \u00D7${p.gbWins}`);
+       if(p.wcWins>0)badges.push(`\u2691 WC Winner \u00D7${p.wcWins}`);
+       const gold=badges.length?`<div class="small gold" style="margin-top:2px;font-weight:700">${badges.join(" \u00B7 ")}</div>`:"";
+       const apps=(p.wcApps>0&&p.wcWins===0)
+         ?`<div class="small muted" style="margin-top:2px">\u2691 ${p.wcApps} World Cup app${p.wcApps>1?"s":""}</div>`
+         :(p.wcApps>0?`<div class="small muted" style="margin-top:2px">${p.wcApps} World Cup app${p.wcApps>1?"s":""}</div>`:"");
+       return gold+apps;
+     })()}
      </div>
      <div class="center"><div class="lbl">OVR</div><div class="big">${p.ovr}</div></div></div>
    <div class="divider"></div>
@@ -1759,7 +1784,8 @@ function goalLeaderCard(playerList,title){
  c.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">${title}</h3>`));
  if(!top.length){c.appendChild($(`<div class="small muted">No goals recorded yet.</div>`));return c;}
  const rows=top.map((p,i)=>`<tr><td class="l muted">${i+1}</td>`+
-   `<td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td>`+
+   `<td class="l"><span class="pname" data-p="${p.id}">${p.name}</span>`+
+   `${(p.gbWins||0)>0?` <span class="gold small" title="Golden Boot winner">\u26BD\u00D7${p.gbWins}</span>`:""}</td>`+
    `<td class="l small muted">${p.pos} \u00B7 ${p.age}y</td><td class="gold"><b>${p.gc}</b></td></tr>`).join("");
  const tb=$(`<table><thead><tr><th class="l">#</th><th class="l">Player</th><th class="l"></th><th>Career</th></tr></thead><tbody>${rows}</tbody></table>`);
  wireNames(tb);c.appendChild(tb);
@@ -1983,15 +2009,18 @@ function viewLeague(w){
  w.appendChild(leagueTable(userRegionKey(),tier,true));
 
  // golden boot race (this tier, all competitions)
- const sc=G.players.filter(p=>p.team!==null&&T(p.team)&&T(p.team).region===userRegionKey()&&T(p.team).tier===tier&&(p.gs||0)>0)
+ // the Boot is awarded per region across all divisions, so the race is too
+ const sc=G.players.filter(p=>p.team!==null&&T(p.team)&&T(p.team).region===userRegionKey()&&(p.gs||0)>0)
    .sort((a,b)=>b.gs-a.gs).slice(0,10);
  if(sc.length){
    const bc=$(`<div class="card" style="margin-top:12px"></div>`);
    bc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Golden Boot race</h3>
-     <div class="small muted" style="margin-bottom:6px">All competitions. The world's top scorer wins the Boot at season's end.</div>`));
+     <div class="small muted" style="margin-bottom:6px">All ${regionOf(userRegionKey()).name} divisions, all competitions. The region's top scorer takes the Boot at season's end.</div>`));
    const rows=sc.map((p,i)=>`<tr class="${p.team===G.userTeam?'me':''}"><td class="l muted">${i+1}</td>`+
-     `<td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td>`+
-     `<td class="l small muted">${T(p.team).name}</td><td class="gold"><b>${p.gs}</b></td></tr>`).join("");
+     `<td class="l"><span class="pname" data-p="${p.id}">${p.name}</span>`+
+     `${(p.gbWins||0)>0?` <span class="gold small">\u26BD\u00D7${p.gbWins}</span>`:""}</td>`+
+     `<td class="l small muted">${T(p.team).name} \u00B7 ${tierName(T(p.team).region,T(p.team).tier)}</td>`+
+     `<td class="gold"><b>${p.gs}</b></td></tr>`).join("");
    const bt=$(`<table><thead><tr><th class="l">#</th><th class="l">Player</th><th class="l">Club</th><th>Gls</th></tr></thead><tbody>${rows}</tbody></table>`);
    wireNames(bt);bc.appendChild(bt);
    w.appendChild(bc);
