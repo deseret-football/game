@@ -1867,6 +1867,7 @@ function ageAndRenew(){
  const retiring=[];
  const youthStars=myStars("youth");
  G.players.forEach(p=>{
+   const seasonApps=p.as||0;   // league + cup minutes this season, before the reset below
    p.age++;p.inj=0;p.susp=0;p.gs=0;p.as=0;
    // Scale attributes by how far the age curve moved this year, NOT by target/ovr.
    // Dividing by the weighted ovr stripped each player's positional tilt on their
@@ -1886,6 +1887,17 @@ function ageAndRenew(){
    const _c=p.team!=null?T(p.team):null;
    if(_c&&_c.trait==="youth"&&_c.id!==G.userTeam&&p.age<23)
      _at.forEach(a=>p[a]=clamp(p[a]+ri(0,2),18,99));
+   // Playing time develops the young. A season of regular minutes is worth up
+   // to +3 attribute points for players who were under 24, on top of the age
+   // curve — roughly +1 per six appearances. Applies at every club, so a kid
+   // left on the bench is out-developed by a rival's young regular. setOvr caps
+   // OVR at potential, so this only helps a player REACH his ceiling sooner,
+   // never exceed it — which is what keeps it safe to stack on everything else.
+   if(p.team!=null&&(p.age-1)<24&&seasonApps>=6){
+     const xp=clamp(Math.floor(seasonApps/6),0,3);
+     const order=shuffle(_at.slice());
+     for(let i=0;i<xp;i++)p[order[i%order.length]]=clamp(p[order[i%order.length]]+1,18,99);
+   }
    setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
    if(p.age>40)retiring.push(p);
  });
