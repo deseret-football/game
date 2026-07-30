@@ -114,6 +114,9 @@
    ~720 players per region, self-renewing · geo names + 45 nationalities
    Regional cups · Conrad (continental) Cup · World Cup every 4 seasons
    Economy: gate, sponsors, merch, TV, stadium tiers · staff + Chief Scout
+   Head coaches are individuals: name, age, tier, trait (what he optimizes FOR),
+   contract, wage, prestige gate · market shared with AI clubs · compensation
+   fees, sackings, renewals, retirement at 65, poaching, and trophy-driven growth
    Transfers across regions in a 3-day window · release players anytime
    Saves to this browser via localStorage (auto after each matchday)
    ======================================================================== */
@@ -218,8 +221,130 @@ const COACH_TIERS=[
   desc:"Everything above, and chooses the formation that best suits your squad."},
  {label:"Elite Coach",wage:32000,boost:2.5,
   desc:"Everything above, and tunes all five tactical dials to suit the XI he picks."}];
-function coachTier(){return Math.max(0,Math.min(3,G.coachTier||0));}
+/* A trait does not make a coach better. It changes what he aims at, so there
+   is no single best hire: the right coach is a read on your squad and your
+   ambition. This is what turns the coach from a purchase into a decision. */
+const COACH_TRAITS={
+ pragmatist:{label:"Pragmatist",
+  desc:"Sets the side up to concede as little as possible. Priceless when outgunned, frustrating in a title chase."},
+ idealist:{label:"Idealist",
+  desc:"Refuses to set up defensively \u2014 your mentality never drops below 70, and he will not play a 5-3-2 or 4-5-1. Thrilling with a strong squad, reckless with a weak one."},
+ youth:{label:"Youth developer",
+  desc:"Fields under-23s over marginally better veterans, and your young players develop faster every summer. Costs you today, pays off in three years."},
+ rotator:{label:"Rotator",
+  desc:"Spreads minutes across the squad. Noticeably fewer injuries, a slightly weaker starting XI."},
+ tactician:{label:"Tactician",
+  desc:"Prepares for the actual next opponent \u2014 their team, their tactics, the venue \u2014 where other coaches tune against a league-average rival."},
+ manman:{label:"Man manager",
+  desc:"Injuries heal faster under his care, and red-card bans are often argued down on appeal."}};
+function coachTier(){return G.coach?Math.max(1,Math.min(3,G.coach.tier)):0;}
 function coachInfo(){return COACH_TIERS[coachTier()];}
+function coachTraitInfo(){return G.coach?COACH_TRAITS[G.coach.trait]:null;}
+function coachWage(tier,age){
+ // older coaches come cheaper: you are buying fewer years
+ const base=[0,8000,18000,32000][tier];
+ const ageF=clamp(1-(age-38)*0.012,0.62,1.12);
+ return Math.max(3000,Math.round(base*ageF*rnd(0.9,1.15)/500)*500);
+}
+function genCoach(id){
+ const rk=pick(REGIONS).key,nm=NAMES[rk];
+ const tier=pick([1,1,1,2,2,2,3,3]);
+ const age=ri(35,63);
+ const c={id,name:pick(nm.first)+" "+pick(nm.last),age,tier,
+   trait:pick(Object.keys(COACH_TRAITS)),club:null,
+   prestigeReq:tier===1?0:tier===2?ri(10,24):ri(30,55)};
+ c.wage=coachWage(tier,age);
+ return c;
+}
+function genCoachPool(){
+ const pool=[];
+ if(G.nextCoachId==null)G.nextCoachId=1000;
+ for(let i=0;i<12;i++)pool.push(genCoach(G.nextCoachId++));
+ // some are already in work at AI clubs; prising them out costs compensation
+ pool.forEach(c=>{if(Math.random()<0.4){
+   const clubs=G.teams.filter(t=>t.id!==G.userTeam&&(t.prestige||0)>=c.prestigeReq);
+   if(clubs.length)c.club=pick(clubs).id;}});
+ return pool;
+}
+function coachCompFee(c){return Math.max(50000,Math.round(c.wage*26/10000)*10000);}
+function coachSeverance(){
+ // paying up the remaining contract: the rest of this season plus full seasons after
+ if(!G.coach)return 0;
+ if(G.coachRenewal)return 0;   // an expired deal costs nothing to walk away from
+ const weeksLeft=Math.max(0,SEASON_LEN-Math.min(G.matchday,SEASON_LEN))
+   +Math.max(0,(G.coach.contract||1)-1)*SEASON_LEN;
+ return weeksLeft*G.coach.wage;
+}
+function releaseCoachToPool(c,clubId){
+ if(!c)return;
+ G.coachPool.push({id:c.id,name:c.name,age:c.age,tier:c.tier,trait:c.trait,
+   wage:c.wage,prestigeReq:c.prestigeReq,club:clubId!=null?clubId:null});
+}
+function hireCoach(c){
+ const t=userTeamObj();
+ if((t.prestige||0)<c.prestigeReq)
+   return toast(`${c.name} will not join a club below prestige ${c.prestigeReq}. Build your standing.`);
+ const comp=c.club!=null?coachCompFee(c):0;
+ const sev=coachSeverance();
+ if(t.budget<comp+sev)
+   return toast(`Need ${money(comp+sev)}${comp&&sev?` (${money(comp)} compensation + ${money(sev)} severance)`:comp?" in compensation":" to pay off your current coach"}.`);
+ const bits=[];
+ if(sev)bits.push(`paying off ${G.coach.name} costs ${money(sev)}`);
+ if(comp)bits.push(`${T(c.club).name} want ${money(comp)} compensation`);
+ if(bits.length&&!confirm(`Hire ${c.name}? ${bits.join(", and ")}.`))return;
+ if(G.coach){t.budget-=sev;if(sev)logAdd(`${G.coach.name} paid off.`,-sev);
+   releaseCoachToPool(G.coach);delete G.coachRenewal;}
+ if(comp){t.budget-=comp;const club=T(c.club);if(club)club.budget+=comp;
+   logAdd(`Compensation paid to ${T(c.club).name} for ${c.name}.`,-comp);}
+ G.coachPool=G.coachPool.filter(x=>x.id!==c.id);
+ const years=ri(2,3);
+ G.coach={id:c.id,name:c.name,age:c.age,tier:c.tier,trait:c.trait,
+   wage:c.wage,prestigeReq:c.prestigeReq,contract:years};
+ logAdd(`${c.name} appointed head coach on a ${years}-year deal at ${money(c.wage)}/wk.`);
+ toast(`${c.name} takes charge.`);
+ saveGame(true);render();
+}
+function sackCoach(){
+ if(!G.coach)return;
+ const t=userTeamObj(),sev=coachSeverance();
+ if(t.budget<sev)return toast(`Paying up his contract costs ${money(sev)}. You cannot afford to sack him.`);
+ if(!confirm(`Sack ${G.coach.name}? Paying up his contract costs ${money(sev)}.`))return;
+ t.budget-=sev;
+ logAdd(`${G.coach.name} sacked. Contract paid up.`,sev?-sev:0);
+ releaseCoachToPool(G.coach);G.coach=null;delete G.coachRenewal;
+ saveGame(true);render();
+}
+function coachRenewalDemand(){
+ // his deal has run out. Success makes him expensive, which is painfully realistic.
+ const c=G.coach;if(!c)return;
+ const h=G.history[G.history.length-1]||{};
+ let mult=1.15;
+ if(h.rank===1&&h.tier===0)mult+=0.35;
+ else if(h.rank===1)mult+=0.2;
+ if(G.cup&&G.cup.winner===G.userTeam)mult+=0.2;
+ if(h.promo)mult+=0.15;
+ G.coachRenewal={wage:Math.round(c.wage*mult/500)*500,years:ri(2,3)};
+}
+function renewCoach(){
+ const r=G.coachRenewal;if(!r||!G.coach)return;
+ G.coach.wage=r.wage;G.coach.contract=r.years;
+ logAdd(`${G.coach.name} signed a new ${r.years}-year deal at ${money(r.wage)}/wk.`);
+ delete G.coachRenewal;
+ toast(`${G.coach.name} stays on.`);saveGame(true);render();
+}
+function declineRenewal(){
+ if(!G.coach)return;
+ logAdd(`${G.coach.name} left the club as his contract expired.`);
+ releaseCoachToPool(G.coach);G.coach=null;delete G.coachRenewal;
+ saveGame(true);render();
+}
+function coachObjective(){
+ // what the coach aims the maths at. Default is goal difference.
+ const tr=G.coach?G.coach.trait:null;
+ if(tr==="pragmatist")return(xh,xa)=>xh*0.4-xa*2;   // keep it tight first
+ if(tr==="idealist")return(xh,xa)=>xh*1.4-xa*0.6;   // goals over safety
+ return(xh,xa)=>xh-xa;
+}
 const STAFF_ROLES={
  fitness:{name:"Fitness Coach",desc:"Fewer injuries"},
  physio:{name:"Physio",desc:"Faster injury recovery"},
@@ -279,7 +404,7 @@ function squadWage(t){return squadOf(t).reduce((s,p)=>s+p.wage,0);}
 function staffWage(){let s=0;for(const r in G.myStaff){const st=G.myStaff[r];if(st)s+=STAFF_WAGE[st.stars]}
  if(G.scoutTier)s+=SCOUT_TIERS[G.scoutTier].wage;
  if(G.superScout)s+=Math.round(SUPER_SCOUT_COST/SEASON_LEN); // £5M/yr over the season's matchdays
- s+=coachInfo().wage;
+ if(G.coach)s+=G.coach.wage;
  return s;}
 function myStars(role){const s=G.myStaff&&G.myStaff[role];return s?s.stars:0;}
 
@@ -338,7 +463,7 @@ function genWorld(ownerName){
 
  G={ver:4,owner:ownerName||"President",nextPid:pid,nextTid:tid,expansion,
     scouted:{},refused:{},scoutTier:null,superScout:false,superShort:null,window:null,offers:[],
-    coachTier:0,
+    coach:null,coachPool:[],nextCoachId:1000,
     players,teams,freeAgents,staffPool,myStaff:{},
     userTeam:null,userRegion:null,season:1,matchday:0,
     tierTeams:null,fixtures:makeFixtures(PER_TIER),lastResults:null,
@@ -346,6 +471,7 @@ function genWorld(ownerName){
     ticketPrice:20,finance:null,log:[],history:[],cup:null,results:[],
     cups:{regional:[],continental:[],world:[]},wcYearsLeft:4,_clubIdx:clubIdx};
  rebuildIndex();rebuildTierTeams();
+ G.coachPool=genCoachPool();
 }
 function blankStd(){return{P:0,W:0,D:0,L:0,GF:0,GA:0,Pts:0}}
 function regionIdx(key){return REGIONS.findIndex(r=>r.key===key);}
@@ -391,9 +517,27 @@ function loadGame(){
    if(!G.news)G.news=[];
    if(G.wcYearsLeft==null)G.wcYearsLeft=4;
    if(!G.refused)G.refused={};
-   if(G.coachTier==null){G.coachTier=0;
-     if(G.myStaff&&G.myStaff.coach){G.coachTier=Math.min(3,Math.max(1,Math.round(G.myStaff.coach.stars/2)));delete G.myStaff.coach;}}
-   if(G.myStaff&&G.myStaff.coach)delete G.myStaff.coach;          // ghost from any path
+   if(G.myStaff&&G.myStaff.coach){
+     if(G.coachTier==null&&G.coach===undefined)G.coachTier=Math.min(3,Math.max(1,Math.round(G.myStaff.coach.stars/2)));
+     delete G.myStaff.coach;}                                     // ghost from any path
+   // migrate tier-only coaches (pre-individuals) into a named person + market
+   if(!G.coachPool){
+     if(G.nextCoachId==null)G.nextCoachId=1000;
+     const old=Math.max(0,Math.min(3,G.coachTier||0));
+     G.coach=null;
+     if(old>0){
+       const c=genCoach(G.nextCoachId++);
+       c.tier=old;c.wage=coachWage(old,c.age);c.club=null;
+       c.prestigeReq=old===1?0:old===2?ri(10,24):ri(30,55);
+       G.coach={id:c.id,name:c.name,age:c.age,tier:c.tier,trait:c.trait,
+         wage:c.wage,prestigeReq:c.prestigeReq,contract:2};
+       G.log.unshift({s:G.season,md:G.matchday,
+         text:`Your ${COACH_TIERS[old].label} now has a name: ${c.name}, a ${COACH_TRAITS[c.trait].label.toLowerCase()} on a 2-year deal.`,amt:0});
+     }
+     G.coachPool=genCoachPool();
+     delete G.coachTier;
+   }
+   if(G.coach===undefined)G.coach=null;
    G.staffPool=(G.staffPool||[]).filter(s=>!!STAFF_ROLES[s.role]); // drop orphaned roles
    G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
      if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
@@ -450,42 +594,49 @@ function nextOpponent(){
    name:opp.name,homeAdv:pickd.home?3:0,comp:pickd.comp};
 }
 function coachBestFormation(){
- // tier 2+: try every shape and keep the one with the best expected goal margin
+ // tier 2+: try every shape and keep the one that best serves what THIS coach
+ // optimizes for. A Pragmatist keeps the ball out; an Idealist chases goals.
  const t=userTeamObj(),rival=averageRival(),neu={mentality:50,pressing:50,tempo:50,width:50,line:50};
+ const c=G.coach,obj=coachObjective();
  let best=null;
  for(const f in FORMATIONS){
+   if(c&&c.trait==="idealist"&&(f==="5-3-2"||f==="4-5-1"))continue;   // will not set up defensively
    const xi=autoXI(t,f);if(xi.length<11)continue;
    const[xh,xa]=xgPair(strength(xi),rival,neu,neu,teamBoost(G.userTeam),0,1.5);
-   const s=xh-xa;
+   const s=obj(xh,xa);
    if(!best||s>best.s)best={f,s};
  }
  return best?best.f:G.formation;
 }
 function coachBestTactics(xi){
- // tier 3: search the dial space using the real match maths, aimed at the
- // actual next opponent (their XI and their tactics). Falls back to a
- // league-average rival in the off-season.
- const nx=nextOpponent();
+ // tier 3: search the dial space using the real match maths. A Tactician
+ // prepares for the actual next opponent (their XI, their tactics, the venue);
+ // every other coach tunes against a league-average rival.
+ const c=G.coach;
+ const nx=(c&&c.trait==="tactician")?nextOpponent():null;
  const rival=nx?nx.strength:averageRival();
  const rTac=nx?nx.tac:{mentality:50,pressing:50,tempo:50,width:50,line:50};
  const adv=nx?nx.homeAdv:1.5;
  const neu={mentality:50,pressing:50,tempo:50,width:50,line:50};
  const sH=strength(xi),boost=teamBoost(G.userTeam);
  const oppBoost=nx?0.8:0;   // assume a competent opposing bench
- const score=d=>{const[xh,xa]=xgPair(sH,rival,d,rTac,boost,oppBoost,adv);return xh-xa;};
+ const obj=coachObjective();
+ const score=d=>{const[xh,xa]=xgPair(sH,rival,d,rTac,boost,oppBoost,adv);return obj(xh,xa);};
+ const mMin=(c&&c.trait==="idealist")?70:0;   // the Idealist will not sit back
  // Two passes instead of a flat 161k-point grid: a coarse sweep at step 25
  // (3,125 evals) then a local refine at step 5 around the winner (~3,125).
  // ~96% fewer evaluations, and finer resolution than the old single pass.
  let best=null;
- for(let m=0;m<=100;m+=25)for(let p=0;p<=100;p+=25)for(let tp=0;tp<=100;tp+=25)
+ for(let m=mMin;m<=100;m+=25)for(let p=0;p<=100;p+=25)for(let tp=0;tp<=100;tp+=25)
  for(let w=0;w<=100;w+=25)for(let l=0;l<=100;l+=25){
    const d={mentality:m,pressing:p,tempo:tp,width:w,line:l};
    const s=score(d);
    if(!best||s>best.s)best={d,s};
  }
- if(!best)return neu;
+ if(!best)return mMin?{...neu,mentality:mMin}:neu;
  const b=best.d,R=v=>[Math.max(0,v-20),Math.min(100,v+20)];
- const[m0,m1]=R(b.mentality),[p0,p1]=R(b.pressing),[t0,t1]=R(b.tempo),
+ const[m0,m1]=[Math.max(mMin,b.mentality-20),Math.min(100,b.mentality+20)],
+       [p0,p1]=R(b.pressing),[t0,t1]=R(b.tempo),
        [w0,w1]=R(b.width),[l0,l1]=R(b.line);
  for(let m=m0;m<=m1;m+=10)for(let p=p0;p<=p1;p+=10)for(let tp=t0;tp<=t1;tp+=10)
  for(let w=w0;w<=w1;w+=10)for(let l=l0;l<=l1;l+=10){
@@ -495,21 +646,51 @@ function coachBestTactics(xi){
  }
  return best.d;
 }
+function coachPickXI(t){
+ // the trait bends WHO gets picked, not just how well
+ const c=G.coach;
+ let xi=autoXI(t,G.formation);
+ if(!c)return xi;
+ const pool=fit(squadOf(t));
+ const inXI=new Set(xi.map(p=>p.id));
+ if(c.trait==="youth"){
+   // an under-23 within 3 OVR of the veteran gets the shirt
+   xi=xi.map(p=>{
+     if(p.pos==="GK"||p.age<23)return p;
+     const kid=pool.filter(k=>k.pos===p.pos&&k.age<23&&!inXI.has(k.id)&&p.ovr-k.ovr<=3)
+       .sort((a,b)=>b.ovr-a.ovr)[0];
+     if(kid){inXI.delete(p.id);inXI.add(kid.id);return kid;}
+     return p;
+   });
+ }
+ if(c.trait==="rotator"){
+   // two outfield starters make way so legs stay fresh
+   shuffle(xi.filter(p=>p.pos!=="GK")).slice(0,2).forEach(st=>{
+     const sub=pool.filter(k=>k.pos===st.pos&&!inXI.has(k.id)&&st.ovr-k.ovr<=8)
+       .sort((a,b)=>b.ovr-a.ovr)[0];
+     if(sub){const idx=xi.indexOf(st);if(idx>=0){xi[idx]=sub;inXI.delete(st.id);inXI.add(sub.id);}}
+   });
+ }
+ return xi;
+}
 function coachAutoSetup(){
  const tier=coachTier();
  if(tier<1)return toast("Hire a head coach to use auto pick.");
- const t=userTeamObj();
+ const t=userTeamObj(),c=G.coach;
  const notes=[];
  if(tier>=2){const f=coachBestFormation();
    if(f!==G.formation)notes.push(`switched to ${f}`);G.formation=f;}
- const xi=autoXI(t,G.formation);
+ const xi=coachPickXI(t);
  G.xi=xi.map(p=>p.id);
- notes.unshift(`picked your strongest XI`);
+ notes.unshift(c.trait==="youth"?"picked an XI with youth in mind"
+   :c.trait==="rotator"?"rotated the side to keep legs fresh"
+   :"picked your strongest XI");
  if(tier>=3){G.tactics=coachBestTactics(xi);
-   const nx=nextOpponent();
-   notes.push(nx?`tuned tactics for ${nx.name}${nx.comp==="cup"?" (cup)":""}`:"tuned your tactics");}
- logAdd(`Head coach ${notes.join(", ")}.`);
- toast(`Coach ${notes.join(", ")}.`);
+   if(c.trait==="tactician"){const nx=nextOpponent();
+     notes.push(nx?`tuned tactics for ${nx.name}${nx.comp==="cup"?" (cup)":""}`:"tuned your tactics");}
+   else notes.push("tuned your tactics");}
+ logAdd(`${c.name} ${notes.join(", ")}.`);
+ toast(`${c.name} ${notes.join(", ")}.`);
  saveGame(true);render();
 }
 function autoXI(team,formation,useAll){
@@ -598,7 +779,12 @@ function simMatch(hXI,aXI,hTac,aTac,hBoost,aBoost,homeAdv=3){
 function teamXI(id){
  return id===G.userTeam?userStartXI():autoXI(T(id),"4-4-2");}
 function teamTac(id){
- if(id===G.userTeam)return G.tactics;
+ if(id===G.userTeam){
+   // an Idealist overrules any instruction to sit back
+   if(G.coach&&G.coach.trait==="idealist"&&G.tactics.mentality<70)
+     return{...G.tactics,mentality:70};
+   return G.tactics;
+ }
  const t=T(id);
  if(t&&t.trait==="attacking")return AI_ATT;
  if(t&&t.trait==="defensive")return AI_DEF;
@@ -622,8 +808,17 @@ function logAdd(text,amt){
  if(G.log.length>60)G.log.length=60;
 }
 function playMatchday(){
+ // an unanswered contract demand expires when the season kicks off: he walks
+ if(G.coachRenewal&&G.coach){
+   logAdd(`${G.coach.name} walked away \u2014 his contract demand went unanswered.`);
+   toast(`${G.coach.name} has left the club.`);
+   releaseCoachToPool(G.coach);G.coach=null;delete G.coachRenewal;
+ }
  // heal one matchday of injuries before selection (suspensions are served this match, cleared after)
- G.players.forEach(p=>{if(p.inj>0)p.inj--});
+ // a Man manager's treatment room often shaves an extra day off
+ const _mm=G.coach&&G.coach.trait==="manman";
+ G.players.forEach(p=>{if(p.inj>0){p.inj--;
+   if(_mm&&p.team===G.userTeam&&p.inj>0&&Math.random()<0.5)p.inj--;}});
  const fx=G.fixtures[G.matchday],out=[];
  let userHome=null,userOpp=null;
  REGIONS.forEach(reg=>{
@@ -879,8 +1074,9 @@ function aiFinanceTick(){
 /* ---- injuries ---- */
 function maybeInjury(){
  const t=T(G.userTeam);
- const chance=.14*(1-.15*Math.min(4,myStars("fitness"))/4* .9)-.015*myStars("fitness");
- if(Math.random()<Math.max(.04,chance)){
+ let chance=.14*(1-.15*Math.min(4,myStars("fitness"))/4* .9)-.015*myStars("fitness");
+ if(G.coach&&G.coach.trait==="rotator")chance*=0.6;   // fresh legs break less
+ if(Math.random()<Math.max(.03,chance)){
    const healthy=fit(squadOf(t));if(!healthy.length)return;
    const p=pick(healthy);
    let dur=ri(2,5)-Math.floor(myStars("physio")/2);dur=Math.max(1,dur);
@@ -912,9 +1108,12 @@ function maybeEvent(){
  deck.push(()=>{const a=ri(40,90)*1000;t.budget+=a;
    logAdd("The board released funds after a favorable audit.",a);});
  deck.push(()=>{const avail=fit(squadOf(t));if(!avail.length)return;
-   const p=pick(avail);p.susp=1;
+   const p=pick(avail);
    const fine=-ri(5,20)*1000;t.budget+=fine;
-   logAdd(`${p.name} was sent off. Suspended for the next match.`,fine);});
+   if(G.coach&&G.coach.trait==="manman"&&Math.random()<0.5){
+     logAdd(`${p.name} was sent off, but ${G.coach.name} argued the ban down on appeal. Fine stands.`,fine);
+   }else{p.susp=1;
+     logAdd(`${p.name} was sent off. Suspended for the next match.`,fine);}});
  const ev=pick(deck);ev();
  const last=G.log[0];
  toast(last.text+(last.amt?` (${last.amt>0?'+':''}${money(last.amt)})`:''));
@@ -1184,6 +1383,7 @@ function endSeason(){
  G.wcYearsLeft=(G.wcYearsLeft||4)-1;
  if(G.wcYearsLeft<=0){runWorldCup();G.wcYearsLeft=4;}
  ageAndRenew();
+ coachSeasonTick();
  G.teams.forEach(t=>t.st=blankStd());
  rebuildTierTeams();
  G.matchday=0;G.season++;G.lastResults=null;G.xi=null;G.results=[];
@@ -1471,6 +1671,9 @@ function ageAndRenew(){
    // youth coach: extra growth for user's under-23s
    if(youthStars&&p.team===G.userTeam&&p.age<23)
      ATTRS.forEach(a=>p[a]=clamp(p[a]+ri(0,Math.ceil(youthStars/2)),18,99));
+   // a Youth developer head coach compounds it: this season for the next three
+   if(G.coach&&G.coach.trait==="youth"&&p.team===G.userTeam&&p.age<23)
+     ATTRS.forEach(a=>p[a]=clamp(p[a]+ri(0,2),18,99));
    // youth academy clubs develop their own prospects faster
    const _c=p.team!=null?T(p.team):null;
    if(_c&&_c.trait==="youth"&&_c.id!==G.userTeam&&p.age<23)
@@ -1502,6 +1705,74 @@ function ageAndRenew(){
    }
  }
  rebuildIndex();
+}
+function coachSeasonTick(){
+ // the coaching world turns over once a season: age, growth, poaching,
+ // expiring deals, and AI clubs shopping from the same market you do.
+ if(!G.news)G.news=[];
+ if(!G.coachPool)G.coachPool=[];
+ const t=userTeamObj();
+ // ---- your coach ----
+ if(G.coach){
+   G.coach.age++;
+   if(G.coach.age>=65){
+     logAdd(`${G.coach.name} retired at 65 after a lifetime in the game.`);
+     G.news.unshift({season:G.season,text:`Head coach ${G.coach.name} retires from football.`});
+     G.coach=null;delete G.coachRenewal;
+   }
+ }
+ if(G.coach){
+   // growth: silverware turns a promising coach into a better one (Pass 3)
+   const c=G.coach,h=G.history[G.history.length-1]||{};
+   const wonSomething=h.rank===1||(G.cup&&G.cup.winner===G.userTeam);
+   if(c.tier<3&&wonSomething&&Math.random()<0.5){
+     c.tier++;
+     c.wage=Math.round(c.wage*1.45/500)*500;
+     c.prestigeReq=Math.max(c.prestigeReq,c.tier===2?12:32);
+     logAdd(`${c.name} has grown into a ${COACH_TIERS[c.tier].label}. His wage rises to ${money(c.wage)}/wk.`);
+     G.news.unshift({season:G.season,text:`${c.name} of ${t.name} is now rated among the game's ${c.tier===3?"elite":"senior"} coaches.`});
+   }
+   // poaching: a bigger club comes calling. This is the one that hurts.
+   if(c.tier>=2){
+     const suitors=G.teams.filter(x=>x.id!==G.userTeam
+       &&(x.prestige||0)>=(t.prestige||0)+12&&(x.prestige||0)>=c.prestigeReq);
+     const chance=0.08+(c.tier===3?0.06:0)+(h.rank===1?0.05:0);
+     if(suitors.length&&Math.random()<chance){
+       const s=suitors.sort((a,b)=>(b.prestige||0)-(a.prestige||0))[0];
+       const fee=coachCompFee(c);
+       t.budget+=fee;s.budget-=fee;
+       logAdd(`${s.name} lured ${c.name} away. ${money(fee)} compensation received.`,fee);
+       G.news.unshift({season:G.season,text:`${s.name} poach head coach ${c.name} from ${t.name}.`});
+       releaseCoachToPool({...c,wage:Math.round(c.wage*1.2/500)*500},s.id);
+       G.coach=null;delete G.coachRenewal;
+     }
+   }
+ }
+ if(G.coach){
+   G.coach.contract=(G.coach.contract||1)-1;
+   if(G.coach.contract<=0)coachRenewalDemand();
+ }
+ // ---- the market ----
+ G.coachPool.forEach(c=>c.age++);
+ G.coachPool=G.coachPool.filter(c=>c.age<65);
+ // AI clubs hire from the same pool. Hesitate on a candidate and he is gone.
+ G.coachPool.filter(c=>c.club==null).forEach(c=>{
+   if(Math.random()<0.22){
+     const clubs=G.teams.filter(x=>x.id!==G.userTeam&&(x.prestige||0)>=c.prestigeReq);
+     if(clubs.length){
+       const ranked=clubs.sort((a,b)=>(b.prestige||0)-(a.prestige||0));
+       const cl=ranked[Math.min(ranked.length-1,ri(0,2))];
+       c.club=cl.id;
+       G.news.unshift({season:G.season,text:`${cl.name} appoint ${c.name} as head coach.`});
+     }
+   }
+ });
+ // some employed coaches shake free at season's end
+ G.coachPool.forEach(c=>{
+   if(c.club!=null&&(!T(c.club)||Math.random()<0.15))c.club=null;});
+ // replenish so there are always candidates worth arguing over
+ if(G.nextCoachId==null)G.nextCoachId=1000;
+ while(G.coachPool.length<12)G.coachPool.push(genCoach(G.nextCoachId++));
 }
 
 /* ======================= USER XI ======================= */
@@ -1578,6 +1849,8 @@ function buyPlayer(p){
  let refuseChance=0.20;
  if(seller.trait==="hoarder")refuseChance=0.40;
  else if(seller.trait==="selling")refuseChance=0.08;
+ // a big-name coach opens doors: players push to join, clubs deal more readily
+ refuseChance=Math.max(0.03,refuseChance-coachTier()*0.03);
  if(Math.random()<refuseChance){
    G.refused[p.id]=true;
    G.window.offersMade++;   // a formal approach costs a move whether it lands or not
@@ -1977,7 +2250,8 @@ function viewSquad(w){
    if(ctier===0)return toast("Hire a head coach in the Office to unlock auto pick.");
    coachAutoSetup();
  };
- if(ctier>0)xc.appendChild($(`<div class="small muted" style="margin-bottom:6px">${coachInfo().label} \u00B7 ${coachInfo().desc}</div>`));
+ if(ctier>0){const _c=G.coach,_tr=COACH_TRAITS[_c.trait];
+   xc.appendChild($(`<div class="small muted" style="margin-bottom:6px">${_c.name} \u00B7 ${coachInfo().label} \u00B7 <span class="gold">${_tr.label}</span>${_c.trait==="idealist"?" \u00B7 mentality never drops below 70":""}</div>`));}
  const slots=slotList(G.formation);
  const used=new Set(G.xi);
  slots.forEach((pos,idx)=>{
@@ -2328,23 +2602,56 @@ function viewOffice(w){
  const scc=$(`<div class="card"></div>`);
  const cc=$(`<div class="card"></div>`);
  cc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Head coach</h3>`));
- cc.appendChild($(`<div class="small muted" style="margin-bottom:8px">Current: <b class="gold">${coachInfo().label}</b>${coachInfo().wage?` \u00B7 ${money(coachInfo().wage)}/wk`:""}${coachInfo().boost?` \u00B7 +${coachInfo().boost.toFixed(1)} match boost`:""}</div>`));
- COACH_TIERS.forEach((ct,i)=>{
-   if(i===0)return;
-   const active=coachTier()===i;
-   const row=$(`<div class="teampick" style="margin-bottom:4px">
-     <div><b>${ct.label}</b> <span class="small muted">${money(ct.wage)}/wk</span>
-     <div class="small muted">${ct.desc}</div></div>
-     <span class="badge-lg">${active?"Employed":coachTier()>i?"\u2713":"Hire"}</span></div>`);
-   if(!active)row.onclick=()=>{G.coachTier=i;
-     logAdd(`${ct.label} appointed.`);saveGame(true);render()};
+ if(G.coach){
+   const c=G.coach,tr=COACH_TRAITS[c.trait];
+   cc.appendChild($(`<div style="margin-bottom:8px">
+     <div class="row"><b class="gold" style="font-size:15px">${c.name}</b><span class="small muted">${c.age}y</span></div>
+     <div class="small" style="margin-top:2px">${COACH_TIERS[c.tier].label} \u00B7 <b class="gold">${tr.label}</b> \u00B7 ${money(c.wage)}/wk \u00B7 +${COACH_TIERS[c.tier].boost.toFixed(1)} match boost</div>
+     <div class="small ${G.coachRenewal?'':'muted'}" style="margin-top:2px">${G.coachRenewal?'<span class="injtag">CONTRACT EXPIRED</span>':`Contract: ${c.contract} season${c.contract===1?"":"s"} remaining`}</div>
+     <div class="small muted" style="margin-top:4px">${COACH_TIERS[c.tier].desc}</div>
+     <div class="small muted" style="margin-top:3px"><b>${tr.label}:</b> ${tr.desc}</div>
+     ${coachTier()>0?`<div class="small muted" style="margin-top:3px">His standing also makes rival clubs ${coachTier()*3}% likelier to sell to you.</div>`:""}
+     ${c.age>=62?`<div class="small" style="margin-top:3px;color:var(--draw)">Nearing the end: coaches retire at 65.</div>`:""}
+   </div>`));
+   if(G.coachRenewal){
+     const r=G.coachRenewal;
+     cc.appendChild($(`<div class="small" style="margin-bottom:8px;padding:8px;border:1px solid var(--honey);border-radius:8px"><b class="gold">${c.name} wants a new deal:</b> ${money(r.wage)}/wk for ${r.years} years${r.wage>c.wage?` (up from ${money(c.wage)})`:""}. Decide before the first matchday or he walks for nothing.</div>`));
+     const row=$(`<div class="row" style="gap:6px"></div>`);
+     const yes=$(`<button class="btn sm" style="flex:1">Renew \u00B7 ${money(r.wage)}/wk</button>`);
+     yes.onclick=()=>renewCoach();
+     const no=$(`<button class="btn sm sec" style="flex:1">Let him go</button>`);
+     no.onclick=()=>{if(confirm(`Let ${c.name} walk? He returns to the open market.`))declineRenewal()};
+     row.appendChild(yes);row.appendChild(no);cc.appendChild(row);
+   }else{
+     const sev=coachSeverance();
+     const dis=$(`<button class="btn sm sec">Sack ${c.name} \u00B7 ${money(sev)} payout</button>`);
+     dis.onclick=()=>sackCoach();
+     cc.appendChild(dis);
+   }
+ }else{
+   cc.appendChild($(`<div class="small muted" style="margin-bottom:8px">No head coach. You pick the side, the shape and the tactics yourself. Hire from the market below to unlock auto-setup \u2014 and choose carefully: every coach optimizes for something different.</div>`));
+ }
+ cc.appendChild($(`<div class="divider"></div>`));
+ cc.appendChild($(`<h3 style="font-size:14px;margin-bottom:2px">Coach market</h3>
+   <div class="small muted" style="margin-bottom:8px">There is no single best hire \u2014 a trait changes what a coach aims at, not how hard he works. Big names refuse small clubs, rival clubs shop from this same list every summer, and a coach in work costs compensation to prise out. Your prestige: <b class="gold">${Math.round(t.prestige||0)}</b>.</div>`));
+ G.coachPool.slice().sort((a,b)=>b.tier-a.tier||b.wage-a.wage).forEach(c=>{
+   const tr=COACH_TRAITS[c.trait];
+   const gated=(t.prestige||0)<c.prestigeReq;
+   const emp=c.club!=null?T(c.club):null;
+   const comp=emp?coachCompFee(c):0;
+   const row=$(`<div class="teampick" style="margin-bottom:4px${gated?';opacity:.45':''}">
+     <div style="flex:1;min-width:0"><b>${c.name}</b> <span class="small muted">${c.age}y</span>
+       <div class="small">${COACH_TIERS[c.tier].label} \u00B7 <span class="gold">${tr.label}</span> \u00B7 ${money(c.wage)}/wk</div>
+       <div class="small muted">${emp?`At ${emp.name} \u00B7 ${money(comp)} compensation`:"Free agent"}${c.prestigeReq?` \u00B7 wants prestige ${c.prestigeReq}+`:""}</div>
+     </div>
+     <span class="badge-lg">${gated?"Too big":"Hire"}</span></div>`);
+   row.onclick=()=>{
+     if(gated)return toast(`${c.name} will not join a club below prestige ${c.prestigeReq}. Build your standing.`);
+     hireCoach(c);
+   };
    cc.appendChild(row);
  });
- if(coachTier()>0){
-   const dis=$(`<button class="btn sm sec" style="margin-top:6px">Dismiss coach</button>`);
-   dis.onclick=()=>{G.coachTier=0;saveGame(true);render()};
-   cc.appendChild(dis);
- }
+ cc.appendChild($(`<div class="small muted" style="margin-top:4px">Coaches age and retire at 65 \u2014 an older name is cheaper because you are buying fewer years. Win silverware and yours may grow a tier\u2026 or get poached by a bigger club.</div>`));
  w.appendChild(cc);
 
  scc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Scouting department</h3>
