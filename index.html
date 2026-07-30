@@ -302,6 +302,7 @@ function hireCoach(c){
    wage:c.wage,prestigeReq:c.prestigeReq,contract:years};
  logAdd(`${c.name} appointed head coach on a ${years}-year deal at ${money(c.wage)}/wk.`);
  toast(`${c.name} takes charge.`);
+ if(G.coachAuto)coachRunSetup();   // he picks his first side immediately
  saveGame(true);render();
 }
 function sackCoach(){
@@ -463,7 +464,7 @@ function genWorld(ownerName){
 
  G={ver:4,owner:ownerName||"President",nextPid:pid,nextTid:tid,expansion,
     scouted:{},refused:{},scoutTier:null,superScout:false,superShort:null,window:null,offers:[],
-    coach:null,coachPool:[],nextCoachId:1000,
+    coach:null,coachPool:[],nextCoachId:1000,coachAuto:true,
     players,teams,freeAgents,staffPool,myStaff:{},
     userTeam:null,userRegion:null,season:1,matchday:0,
     tierTeams:null,fixtures:makeFixtures(PER_TIER),lastResults:null,
@@ -538,6 +539,7 @@ function loadGame(){
      delete G.coachTier;
    }
    if(G.coach===undefined)G.coach=null;
+   if(G.coachAuto==null)G.coachAuto=true;   // hiring a coach means delegating to him
    G.staffPool=(G.staffPool||[]).filter(s=>!!STAFF_ROLES[s.role]); // drop orphaned roles
    G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
      if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
@@ -673,9 +675,12 @@ function coachPickXI(t){
  }
  return xi;
 }
-function coachAutoSetup(){
+function coachRunSetup(){
+ // the coach sets up the side at his tier. Silent: no log, toast, save or
+ // render, so it can run inside the matchday loop or a re-render. Returns the
+ // list of things he did (for the manual button to narrate), or null.
  const tier=coachTier();
- if(tier<1)return toast("Hire a head coach to use auto pick.");
+ if(tier<1)return null;
  const t=userTeamObj(),c=G.coach;
  const notes=[];
  if(tier>=2){const f=coachBestFormation();
@@ -689,8 +694,14 @@ function coachAutoSetup(){
    if(c.trait==="tactician"){const nx=nextOpponent();
      notes.push(nx?`tuned tactics for ${nx.name}${nx.comp==="cup"?" (cup)":""}`:"tuned your tactics");}
    else notes.push("tuned your tactics");}
- logAdd(`${c.name} ${notes.join(", ")}.`);
- toast(`${c.name} ${notes.join(", ")}.`);
+ return notes;
+}
+function coachAutoSetup(){
+ // manual "do it once now" button
+ if(coachTier()<1)return toast("Hire a head coach to use auto pick.");
+ const notes=coachRunSetup();
+ logAdd(`${G.coach.name} ${notes.join(", ")}.`);
+ toast(`${G.coach.name} ${notes.join(", ")}.`);
  saveGame(true);render();
 }
 function autoXI(team,formation,useAll){
@@ -819,6 +830,10 @@ function playMatchday(){
  const _mm=G.coach&&G.coach.trait==="manman";
  G.players.forEach(p=>{if(p.inj>0){p.inj--;
    if(_mm&&p.team===G.userTeam&&p.inj>0&&Math.random()<0.5)p.inj--;}});
+ // fully delegated: the coach sets the side himself before every kickoff.
+ // Runs now that injuries have healed and before the fixture is read, so a
+ // Tactician still prepares for this exact opponent.
+ if(G.coachAuto&&coachTier()>0)coachRunSetup();
  const fx=G.fixtures[G.matchday],out=[];
  let userHome=null,userOpp=null;
  REGIONS.forEach(reg=>{
@@ -2222,9 +2237,37 @@ function viewClub(w){
 /* ---------- SQUAD ---------- */
 function viewSquad(w){
  ensureXI();
+ const ctier=coachTier();
+ const delegated=ctier>0&&G.coachAuto;
+ // When delegated, show exactly the side he will field, and lock only the
+ // controls he governs at his tier: the XI always, the shape at 2+, dials at 3.
+ if(delegated)coachRunSetup();
+ const lockForm=delegated&&ctier>=2;
+ const lockDials=delegated&&ctier>=3;
+ const lockXI=delegated;
+
+ // ---- delegation toggle ----
+ if(ctier>0){
+   const _c=G.coach,_tr=COACH_TRAITS[_c.trait];
+   const dc=$(`<div class="card" style="border-color:${delegated?'var(--honey)':'var(--line)'}"></div>`);
+   dc.appendChild($(`<div class="row"><h3 style="font-size:15px">Team selection</h3>
+     <button class="btn sm ${delegated?'':'sec'}">${delegated?'Coach in charge':'You in charge'}</button></div>`));
+   dc.appendChild($(`<div class="small muted" style="margin-top:4px">${_c.name} \u00B7 ${coachInfo().label} \u00B7 <span class="gold">${_tr.label}</span>${_c.trait==="idealist"?" \u00B7 won't drop below mentality 70":""}</div>`));
+   dc.appendChild($(`<div class="small muted" style="margin-top:4px">${delegated
+     ?`Fully delegated. ${_c.name} sets the XI${ctier>=2?', the shape':''}${ctier>=3?' and the tactics':''} before every match \u2014 nothing needed from you. Switch him off to pick the side yourself.`
+     :`You are picking the side yourself. Switch the coach on and he handles the XI${ctier>=2?', shape':''}${ctier>=3?' and tactics':''} before every match automatically.`}</div>`));
+   dc.querySelector("button").onclick=()=>{
+     G.coachAuto=!G.coachAuto;
+     if(G.coachAuto)coachRunSetup();
+     toast(G.coachAuto?`${_c.name} will run the team.`:"You have taken control of team selection.");
+     saveGame(true);render();
+   };
+   w.appendChild(dc);
+ }
+
  const fc=$(`<div class="card"></div>`);
- fc.appendChild($(`<div class="lbl">Formation</div>`));
- const fsel=$(`<select style="margin-top:6px">${Object.keys(FORMATIONS).map(f=>`<option ${f===G.formation?'selected':''}>${f}</option>`).join("")}</select>`);
+ fc.appendChild($(`<div class="lbl">Formation${lockForm?' \u00B7 set by coach':''}</div>`));
+ const fsel=$(`<select style="margin-top:6px" ${lockForm?'disabled':''}>${Object.keys(FORMATIONS).map(f=>`<option ${f===G.formation?'selected':''}>${f}</option>`).join("")}</select>`);
  fsel.onchange=()=>{G.formation=fsel.value;G.xi=autoXI(userTeamObj(),G.formation).map(p=>p.id);render()};
  fc.appendChild(fsel);
  [["mentality","Defensive","Attacking"],["pressing","Low block","High press"],
@@ -2232,26 +2275,32 @@ function viewSquad(w){
    ["line","Deep line","High line"]].forEach(([k,lo,hi])=>{
    const sr=$(`<div class="slider-row"></div>`);
    sr.appendChild($(`<div class="ends"><span>${lo}</span><span>${hi}</span></div>`));
-   const inp=$(`<input type="range" min="0" max="100" value="${G.tactics[k]}">`);
+   const inp=$(`<input type="range" min="0" max="100" value="${G.tactics[k]}" ${lockDials?'disabled':''}>`);
    inp.oninput=()=>{G.tactics[k]=+inp.value};
    sr.appendChild(inp);fc.appendChild(sr);
  });
+ if(lockDials)fc.appendChild($(`<div class="small muted" style="margin-top:8px">The dials your coach has set for the next match. Switch him off above to tune them yourself.</div>`));
+ else if(delegated)fc.appendChild($(`<div class="small muted" style="margin-top:8px">Your coach picks the XI${lockForm?" and shape":""}; the dials are yours to set at his level.</div>`));
  w.appendChild(fc);
 
  const xc=$(`<div class="card"></div>`);
- const ctier=coachTier();
  const clabel=ctier===0?"Auto-pick \u00B7 needs a coach"
    :ctier===1?"Coach: pick XI"
    :ctier===2?"Coach: pick XI + shape"
    :"Coach: pick XI, shape + tactics";
- xc.appendChild($(`<div class="row"><h3 style="font-size:15px">Starting XI</h3>
-   <button class="btn sm ${ctier===0?'sec':''}">${clabel}</button></div>`));
- xc.querySelector("button").onclick=()=>{
-   if(ctier===0)return toast("Hire a head coach in the Office to unlock auto pick.");
-   coachAutoSetup();
- };
- if(ctier>0){const _c=G.coach,_tr=COACH_TRAITS[_c.trait];
-   xc.appendChild($(`<div class="small muted" style="margin-bottom:6px">${_c.name} \u00B7 ${coachInfo().label} \u00B7 <span class="gold">${_tr.label}</span>${_c.trait==="idealist"?" \u00B7 mentality never drops below 70":""}</div>`));}
+ if(lockXI){
+   xc.appendChild($(`<div class="row"><h3 style="font-size:15px">Starting XI</h3>
+     <span class="small gold">Chosen by ${G.coach.name}</span></div>`));
+ }else{
+   xc.appendChild($(`<div class="row"><h3 style="font-size:15px">Starting XI</h3>
+     <button class="btn sm ${ctier===0?'sec':''}">${clabel}</button></div>`));
+   xc.querySelector("button").onclick=()=>{
+     if(ctier===0)return toast("Hire a head coach in the Office to unlock auto pick.");
+     coachAutoSetup();
+   };
+   if(ctier>0){const _c=G.coach,_tr=COACH_TRAITS[_c.trait];
+     xc.appendChild($(`<div class="small muted" style="margin-bottom:6px">${_c.name} \u00B7 ${coachInfo().label} \u00B7 <span class="gold">${_tr.label}</span>. Tap above for a one-off pick, or delegate every matchday with the toggle.</div>`));}
+ }
  const slots=slotList(G.formation);
  const used=new Set(G.xi);
  slots.forEach((pos,idx)=>{
@@ -2261,7 +2310,7 @@ function viewSquad(w){
    const curP=P(cur);
    if(curP&&curP.inj>0&&!opts.find(p=>p.id===cur))opts.unshift(curP);
    const row=$(`<div class="row" style="margin:6px 0"><span class="pos ${pos}">${pos}</span></div>`);
-   const sel=$(`<select style="flex:1;margin-left:8px">${opts.map(p=>`<option value="${p.id}" ${p.id===cur?'selected':''}>${p.name} \u00B7 ${p.ovr} \u00B7 ${p.age}y${p.inj>0?" \u00B7 INJ":""}</option>`).join("")}</select>`);
+   const sel=$(`<select style="flex:1;margin-left:8px" ${lockXI?'disabled':''}>${opts.map(p=>`<option value="${p.id}" ${p.id===cur?'selected':''}>${p.name} \u00B7 ${p.ovr} \u00B7 ${p.age}y${p.inj>0?" \u00B7 INJ":""}</option>`).join("")}</select>`);
    sel.onchange=()=>{G.xi[idx]=+sel.value;render()};
    row.appendChild(sel);xc.appendChild(row);
  });
@@ -2611,6 +2660,7 @@ function viewOffice(w){
      <div class="small muted" style="margin-top:4px">${COACH_TIERS[c.tier].desc}</div>
      <div class="small muted" style="margin-top:3px"><b>${tr.label}:</b> ${tr.desc}</div>
      ${coachTier()>0?`<div class="small muted" style="margin-top:3px">His standing also makes rival clubs ${coachTier()*3}% likelier to sell to you.</div>`:""}
+     <div class="small" style="margin-top:3px">${G.coachAuto?`<span class="gold">Running the team automatically</span> \u2014 he sets the side before every match. Change this in the Squad tab.`:`<span class="muted">You are picking the side yourself.</span> Delegate to him in the Squad tab.`}</div>
      ${c.age>=62?`<div class="small" style="margin-top:3px;color:var(--draw)">Nearing the end: coaches retire at 65.</div>`:""}
    </div>`));
    if(G.coachRenewal){
