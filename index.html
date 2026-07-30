@@ -74,6 +74,9 @@
   .teampick{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;
     border:1px solid var(--line);border-radius:8px;margin-bottom:7px;background:var(--panel);cursor:pointer}
   .teampick:active{background:var(--panel2)}
+  .pill{display:inline-block;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:800;
+    letter-spacing:.06em;text-transform:uppercase;background:var(--honey);color:#241a00;
+    vertical-align:middle;margin-left:4px}
   .badge-lg{display:inline-block;padding:3px 9px;border-radius:5px;font-size:10px;font-weight:700;
     letter-spacing:.08em;text-transform:uppercase;background:var(--grana);color:#fff;border:1px solid transparent}
   .grp-h{font-weight:800;font-size:14px;margin:16px 0 9px;display:flex;align-items:center;gap:8px}
@@ -275,7 +278,7 @@ function squadOf(t){return t.squad.map(P);}
 function squadWage(t){return squadOf(t).reduce((s,p)=>s+p.wage,0);}
 function staffWage(){let s=0;for(const r in G.myStaff){const st=G.myStaff[r];if(st)s+=STAFF_WAGE[st.stars]}
  if(G.scoutTier)s+=SCOUT_TIERS[G.scoutTier].wage;
- if(G.superScout)s+=Math.round(SUPER_SCOUT_COST/40); // £5M/yr spread over ~40 pay periods
+ if(G.superScout)s+=Math.round(SUPER_SCOUT_COST/SEASON_LEN); // £5M/yr over the season's matchdays
  s+=coachInfo().wage;
  return s;}
 function myStars(role){const s=G.myStaff&&G.myStaff[role];return s?s.stars:0;}
@@ -351,7 +354,7 @@ function rebuildTierTeams(){
  G.teams.forEach(t=>G.tierTeams[regionIdx(t.region)][t.tier].push(t.id));
 }
 function tierClubs(regionKey,tier){return G.tierTeams[regionIdx(regionKey)][tier];}
-function userRegionKey(){return T(G.userTeam).region;}
+function userRegionKey(){const t=T(G.userTeam);return t?t.region:REGIONS[0].key;}
 function userRegionKeySafe(){const t=T(G.userTeam);return t?t.region:REGIONS[0].key;}
 function makeFixtures(n){
  let arr=[...Array(n).keys()];if(n%2)arr.push(-1);
@@ -469,15 +472,28 @@ function coachBestTactics(xi){
  const neu={mentality:50,pressing:50,tempo:50,width:50,line:50};
  const sH=strength(xi),boost=teamBoost(G.userTeam);
  const oppBoost=nx?0.8:0;   // assume a competent opposing bench
+ const score=d=>{const[xh,xa]=xgPair(sH,rival,d,rTac,boost,oppBoost,adv);return xh-xa;};
+ // Two passes instead of a flat 161k-point grid: a coarse sweep at step 25
+ // (3,125 evals) then a local refine at step 5 around the winner (~3,125).
+ // ~96% fewer evaluations, and finer resolution than the old single pass.
  let best=null;
- for(let m=0;m<=100;m+=10)for(let p=0;p<=100;p+=10)for(let tp=0;tp<=100;tp+=10)
- for(let w=0;w<=100;w+=10)for(let l=0;l<=100;l+=10){
+ for(let m=0;m<=100;m+=25)for(let p=0;p<=100;p+=25)for(let tp=0;tp<=100;tp+=25)
+ for(let w=0;w<=100;w+=25)for(let l=0;l<=100;l+=25){
    const d={mentality:m,pressing:p,tempo:tp,width:w,line:l};
-   const[xh,xa]=xgPair(sH,rival,d,rTac,boost,oppBoost,adv);
-   const s=xh-xa;
+   const s=score(d);
    if(!best||s>best.s)best={d,s};
  }
- return best?best.d:neu;
+ if(!best)return neu;
+ const b=best.d,R=v=>[Math.max(0,v-20),Math.min(100,v+20)];
+ const[m0,m1]=R(b.mentality),[p0,p1]=R(b.pressing),[t0,t1]=R(b.tempo),
+       [w0,w1]=R(b.width),[l0,l1]=R(b.line);
+ for(let m=m0;m<=m1;m+=10)for(let p=p0;p<=p1;p+=10)for(let tp=t0;tp<=t1;tp+=10)
+ for(let w=w0;w<=w1;w+=10)for(let l=l0;l<=l1;l+=10){
+   const d={mentality:m,pressing:p,tempo:tp,width:w,line:l};
+   const s=score(d);
+   if(s>best.s)best={d,s};
+ }
+ return best.d;
 }
 function coachAutoSetup(){
  const tier=coachTier();
@@ -817,11 +833,13 @@ function sellingClubSales(){
    const p=vets.sort((a,b)=>b.value-a.value)[0];
    t.budget+=Math.round(p.value*.9);
    t.squad=t.squad.filter(x=>x!==p.id);p.team=null;G.freeAgents.push(p.id);
-   if(G.news&&((p.gc||0)>=25||p.ovr>=72))
-     // push to the end so these don't crowd out the interesting stories
+   // only notable departures make the feed, pushed to the back so they do not
+   // crowd out league and cup stories, and capped per season
+   if((p.gc||0)>=25||p.ovr>=72){
      if(!G.news)G.news=[];
      const cashCount=G.news.filter(n=>n.season===G.season&&/cash in again/.test(n.text)).length;
      if(cashCount<3)G.news.push({season:G.season,text:`${t.name} cash in again, letting ${p.name} go.`});
+   }
  });
 }
 function boardForcedSales(){
@@ -1071,7 +1089,10 @@ function endSeason(){
  REGIONS.forEach(r=>RT[r.key].forEach((tbl,tier)=>tbl.forEach((t,rank)=>{
    const tv=base[tier]+(PER_TIER-rank)*220000;
    if(t.id===G.userTeam){t.budget+=tv;logAdd("Season TV and prize money received.",tv);}
-   else t.budget+=tv-squadWage(t)*28;
+   // AI wages are already deducted every matchday in aiFinanceTick, so the
+   // season-end payment is TV and prize money only. Charging both meant AI
+   // clubs paid 46 weeks of wages per 18-matchday season.
+   else t.budget+=tv;
  })));
  // insolvent AI sells
  G.teams.forEach(t=>{
@@ -2341,7 +2362,7 @@ function viewOffice(w){
    rel.onclick=()=>{G.scoutTier=null;saveGame(true);render()};scc.appendChild(rel);
  }
  scc.appendChild($(`<div class="divider"></div>`));
- scc.appendChild($(`<div class="small"><b>Chief Scout</b> \u00B7 ${money(SUPER_SCOUT_COST)}/yr (${money(Math.round(SUPER_SCOUT_COST/40))}/wk on the wage bill) \u00B7 scours all regions and delivers a shortlist of the best young talent on Day 1 of each transfer window.</div>`));
+ scc.appendChild($(`<div class="small"><b>Chief Scout</b> \u00B7 ${money(SUPER_SCOUT_COST)}/yr (${money(Math.round(SUPER_SCOUT_COST/SEASON_LEN))}/matchday on the wage bill) \u00B7 scours all regions and delivers a shortlist of the best young talent on Day 1 of each transfer window.</div>`));
  const ssRow=$(`<div class="row" style="margin-top:6px"></div>`);
  if(G.superScout){
    ssRow.appendChild($(`<span class="small gold">Employed \u2605</span>`));
