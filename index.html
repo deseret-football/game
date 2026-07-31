@@ -70,6 +70,7 @@
     text-transform:uppercase;letter-spacing:.04em;border-radius:0}
   nav button .ic{font-size:17px;line-height:1}
   nav button.on{color:var(--honey)}
+  nav button.alert,nav button.alert .ic{color:var(--loss)}
   .start{padding:22px 18px}
   .teampick{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;
     border:1px solid var(--line);border-radius:8px;margin-bottom:7px;background:var(--panel);cursor:pointer}
@@ -116,7 +117,7 @@
 <script>
 /* ========================================================================
    EMPIRE FC v4 — multi-region management sim
-   3 regions (Deseret / Kauai / Italian Brainrot) · 3 tiers x 10 clubs each
+   3 regions (Deseret / Kauai / Brainrot) · 3 tiers x 10 clubs each
    ~720 players per region, self-renewing · geo names + 45 nationalities
    Regional cups · Conrad (continental) Cup · World Cup every 4 seasons
    Economy: gate, sponsors, merch, TV, stadium tiers · staff + Chief Scout
@@ -165,7 +166,7 @@ const REGION_CLUBS={
  founders:["Tralalero FC","Bombardiro United","Tung Tung City","Cappuccino Rovers","Ballerina Athletic",
   "Lirili Larila FC","Chimpanzini United","Brr Patapim Town","Boneca City","Trippi Troppi United",
   "Crocodilo FC","Sahur Rovers","Bananini City","Assassino United","Frigo Camelo FC",
-  "Bombombini Town","Girafa Celeste United","Bri Bri FC","Glorbo Fruttodrillo City","Tigrullini Rovers",
+  "Bombombini Town","Papas Gatatas United","Bri Bri FC","Glorbo Fruttodrillo City","Tigrullini Rovers",
   "Orcalero FC","Trulimero United","Bobrito Bandito Town","Matteo City","Cocofanto FC",
   "Ambalabu United","Pipi Kiwi Rovers","Tracotocutulo FC","Bikini Camanini","Zibra Zubra United"]};
 const REGION_EXPANSION={
@@ -451,7 +452,7 @@ function newPlayer(id,pos,age,regionKey){
  const rk=regionKey||pick(REGIONS).key;const nm=NAMES[rk];
  const p={id,name:pick(nm.first)+" "+pick(nm.last),pos,age,region:rk,nat:pick(COUNTRIES),
    pot:56+Math.floor(Math.pow(Math.random(),1.6)*43),team:null,inj:0,
-   gs:0,gc:0,as:0,ac:0,susp:0,wcWins:0,wcApps:0,gbWins:0};
+   gs:0,gc:0,as:0,ac:0,susp:0,wcWins:0,wcApps:0,tippyWins:0,tippyApps:0,gbWins:0};
  makeAttrs(p);p.value=valueOf(p);p.wage=wageOf(p);return p;}
 
 function newStaff(id,role){
@@ -604,7 +605,7 @@ function hydrateLoadedG(){
  {const ut=T(G.userTeam);
   if(ut&&ut.leagueTitleSeasons.length===0&&(ut.leagueTitles||0)>0)
     ut.leagueTitleSeasons=(G.history||[]).filter(h=>h.tier===0&&h.rank===1).map(h=>h.season);}
- G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0;p.gbWins=p.gbWins||0});
+ G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0;p.tippyWins=p.tippyWins||0;p.tippyApps=p.tippyApps||0;p.gbWins=p.gbWins||0});
  // migrate keepers from the old shared six to dedicated keeper metrics,
  // preserving OVR: seed each new metric near the old rating, then recompute.
  G.players.forEach(p=>{
@@ -1090,16 +1091,26 @@ function attendanceFactors(t,oppId,cupStage){
  if(rank>0)f.form=((PER_TIER/2)-rank)*.018;   // +7% top, -8% bottom
  // Cup knockouts: the later the round, the bigger the occasion
  if(cupStage!=null)f.cup=[.06,.12,.20,.30][Math.min(cupStage,3)]||0;
- const total=clamp(demand+f.boot+f.goat+f.prestige+f.form+f.cup,.08,1);
- f.total=total;
+ const total0=clamp(demand+f.boot+f.goat+f.prestige+f.form+f.cup,.08,1);
+ // Excess demand buys pricing power. rawAppeal ignores the current price: when a
+ // fixture would sell out at face value (rawAppeal>1) \u2014 a GOAT on show, several
+ // Golden Boots, two powerhouses, a cup final \u2014 fans tolerate a premium before the
+ // ground thins. A dead rubber tops out near \u00A355; the match of the century, well
+ // into the hundreds. Above that comfort price the crowd falls away to zero, so no
+ // positive floor can be farmed at absurd prices (a \u00A31,000 ticket empties the ground).
+ const rawAppeal=(.42+rep*.45)+f.boot+f.goat+f.prestige+f.form+f.cup;
+ const comfort=55+clamp(rawAppeal-1,0,1)*130;   // \u00A355 (routine) \u2026 ~\u00A3185 (peak hype)
+ f.comfort=comfort;
+ f.total=(G.ticketPrice>comfort)?total0*clamp(1-(G.ticketPrice-comfort)/(comfort*1.2),0,1):total0;
  return f;
 }
 function attendance(t,oppId,cupStage){
  return Math.round(effCapacity(t)*attendanceFactors(t,oppId,cupStage).total);}
 const STADIUM_TIERS=[
- {addSeats:6000,cost:6000000,label:"Tier 1 expansion (+6k)"},
- {addSeats:10000,cost:14000000,label:"Tier 2 expansion (+10k)"},
- {addSeats:16000,cost:28000000,label:"Tier 3 expansion (+16k)"}];
+ {addSeats:6000,cost:6000000,years:1,label:"Tier 1 expansion (+6k)"},
+ {addSeats:10000,cost:14000000,years:1,label:"Tier 2 expansion (+10k)"},
+ {addSeats:16000,cost:28000000,years:1,label:"Tier 3 expansion (+16k)"},
+ {target:100000,cost:100000000,years:2,label:"Mega stadium (100k)"}];
 function nextHomeFixture(){
  // the user's next home occasion: league game or home cup tie, whichever is nearer
  if(G.matchday>=SEASON_LEN)return null;
@@ -1130,14 +1141,31 @@ function secondaryMarket(){
  return{opp:T(nx.opp)?T(nx.opp).name:"?",cup:nx.cupStage!=null,factors:f,
    resale,heat,surge:Math.round((heat-1)*100)};
 }
+/* Richer, higher-prestige, higher-division AI clubs break ground on their own
+   grounds and keep a cash buffer in reserve, so the mega tier is not user-only. */
+function aiStadiumTick(){
+ G.teams.forEach(t=>{
+   if(t.id===G.userTeam||t.building>0||(t.stadiumLevel||0)>=STADIUM_TIERS.length)return;
+   const plan=STADIUM_TIERS[t.stadiumLevel||0];
+   if(t.budget<plan.cost*1.4)return;                 // keep a 40% buffer after building
+   const drive=0.04+(t.prestige||0)/500+(t.tier===0?0.10:t.tier===1?0.04:0);
+   if(Math.random()<drive){
+     t.budget-=plan.cost;t.building=plan.years||1;
+     t.pendingSeats=plan.target?Math.max(0,plan.target-t.capacity):plan.addSeats;
+     if(G.news)G.news.unshift({season:G.season,text:`${t.name} break ground on a ${plan.label}.`});
+   }
+ });
+}
 function startStadiumBuild(){
  const t=userTeamObj();
  if(t.building>0)return toast("Construction is already under way.");
- if(t.stadiumLevel>=3)return toast("Your stadium is already at maximum size.");
+ if(t.stadiumLevel>=STADIUM_TIERS.length)return toast("Your stadium is already at maximum size.");
  const plan=STADIUM_TIERS[t.stadiumLevel];
  if(t.budget<plan.cost)return toast(`Need ${money(plan.cost)} to begin.`);
- t.budget-=plan.cost;t.building=1;t.pendingSeats=plan.addSeats;
- logAdd(`Stadium ${plan.label} begun. Playing in a temporary ground this season.`,-plan.cost);
+ t.budget-=plan.cost;t.building=plan.years||1;
+ t.pendingSeats=plan.target?Math.max(0,plan.target-t.capacity):plan.addSeats;
+ const dur=(plan.years||1)===1?"a temporary ground this season":`a temporary ground for ${plan.years} seasons`;
+ logAdd(`Stadium ${plan.label} begun. Playing in ${dur}.`,-plan.cost);
  saveGame(true);render();
 }
 function sponsorWeekly(t){
@@ -1582,8 +1610,14 @@ function endSeason(){
  youthAcademyChurn();
  aiSquadTopUp();
  // finish any stadium builds: capacity grows, temporary ground retired
- G.teams.forEach(t=>{if(t.building>0){t.capacity+=(t.pendingSeats||0);t.stadiumLevel=(t.stadiumLevel||0)+1;t.building=0;t.pendingSeats=0;
-   if(t.id===G.userTeam)logAdd(`Stadium expansion complete. Capacity now ${t.capacity.toLocaleString()}.`);}});
+ G.teams.forEach(t=>{if(t.building>0){t.building--;
+   if(t.building<=0){t.capacity+=(t.pendingSeats||0);t.stadiumLevel=(t.stadiumLevel||0)+1;t.building=0;t.pendingSeats=0;
+     if(t.id===G.userTeam)logAdd(`Stadium expansion complete. Capacity now ${t.capacity.toLocaleString()}.`);}
+   else if(t.id===G.userTeam)logAdd(`Stadium construction continues \u2014 ${t.building} season${t.building===1?"":"s"} of temporary ground left.`);}});
+ // AI clubs invest in their grounds too, so the mega tier is not user-only and the
+ // world's stadiums grow over the years. Run AFTER the completion loop so a build
+ // started this season serves its full term.
+ aiStadiumTick();
  // simulate cups for the other two regions so cupTitles stay accurate
  {const ureg2=userRegionKey();
   REGIONS.forEach(r=>{if(r.key!==ureg2)simulateRegionalCup(r.key,RT);});}
@@ -1900,7 +1934,9 @@ function runTippyCup(){
    alive=next;
  }
  const champ=alive[0].country;
- Object.keys(gamesPlayed).forEach(id=>{const p=P(+id);if(!p)return;const g=gamesPlayed[id];if(g>0)awardXP(p,g);});
+ Object.keys(gamesPlayed).forEach(id=>{const p=P(+id);if(!p)return;const g=gamesPlayed[id];
+   if(g>0){awardXP(p,g);p.tippyApps=(p.tippyApps||0)+g;}});
+ (squads[champ]||[]).forEach(id=>{const p=P(+id);if(p)p.tippyWins=(p.tippyWins||0)+1;});
  if(!G.cups.tippy)G.cups.tippy=[];
  const rec={season:G.season,champion:champ,finalists,squads,gamesPlayed,log:log.slice(0,8)};
  G.cups.tippy.push(rec);G.lastTippy=rec;
@@ -2201,8 +2237,10 @@ const TICKET_MGR_WAGE=15000;   // weekly cost of the automated ticket-pricing ma
    fixture (attendance falls as the price rises, so there is a revenue-maximising
    point). Restores G.ticketPrice before returning. */
 function optimalTicketPrice(t,oppId,cupStage){
+ // The revenue optimum never exceeds a hype fixture's comfort price (~\u00A3185 at most),
+ // so a scan to \u00A3300 covers every case with margin while staying cheap.
  const save=G.ticketPrice;let best=save,bestRev=-1;
- for(let p=5;p<=60;p++){G.ticketPrice=p;const rev=attendance(t,oppId,cupStage)*p;
+ for(let p=5;p<=300;p++){G.ticketPrice=p;const rev=attendance(t,oppId,cupStage)*p;
    if(rev>bestRev){bestRev=rev;best=p;}}
  G.ticketPrice=save;return best;
 }
@@ -2273,11 +2311,15 @@ function showPlayer(id){
        const badges=[];
        if(p.gbWins>0)badges.push(`\u26BD GB Winner \u00D7${p.gbWins}`);
        if(p.wcWins>0)badges.push(`\u2691 WC Winner \u00D7${p.wcWins}`);
+       if(p.tippyWins>0)badges.push(`\u2728 Tippy Winner \u00D7${p.tippyWins}`);
        const gold=badges.length?`<div class="small gold" style="margin-top:2px;font-weight:700">${badges.join(" \u00B7 ")}</div>`:"";
        const apps=(p.wcApps>0&&p.wcWins===0)
          ?`<div class="small muted" style="margin-top:2px">\u2691 ${p.wcApps} World Cup app${p.wcApps>1?"s":""}</div>`
          :(p.wcApps>0?`<div class="small muted" style="margin-top:2px">${p.wcApps} World Cup app${p.wcApps>1?"s":""}</div>`:"");
-       return gold+apps;
+       const tippy=(p.tippyApps>0&&p.tippyWins===0)
+         ?`<div class="small muted" style="margin-top:2px">\u2728 ${p.tippyApps} Tippy Cup app${p.tippyApps>1?"s":""}</div>`
+         :(p.tippyApps>0?`<div class="small muted" style="margin-top:2px">${p.tippyApps} Tippy Cup app${p.tippyApps>1?"s":""}</div>`:"");
+       return gold+apps+tippy;
      })()}
      </div>
      <div class="center"><div class="lbl">OVR</div><div class="big">${p.ovr}</div></div></div>
@@ -2333,9 +2375,13 @@ function render(){
 function nav(){
  const items=[["club","\u2302","Club"],["squad","\u26BD","Squad"],["league","\u2691","League"],
    ["cup","\u2726","Cups"],["transfers","\u21C4","Market"],["world","\u25C9","World"],["office","\u270E","Office"]];
+ // Warn (red) during the pre-season window when you are set to start the season with
+ // no head coach: he retired, was poached, or his deal lapsed and he is about to walk.
+ const coachAlert=inWindow()&&(!G.coach||!!G.coachRenewal);
  const n=$(`<nav></nav>`);
  items.forEach(([k,ic,lab])=>{
-   const b=$(`<button class="${TAB===k?'on':''}"><span class="ic">${ic}</span>${lab}</button>`);
+   const alert=(k==="office"&&coachAlert);
+   const b=$(`<button class="${TAB===k?'on':''}${alert?' alert':''}"><span class="ic">${ic}</span>${lab}</button>`);
    b.onclick=()=>{if(k!=="world")WORLD_TEAM=null;TAB=k;render()};n.appendChild(b);
  });
  return n;
@@ -3026,8 +3072,8 @@ function viewOffice(w){
    fc.appendChild(mgr);
  }else{
    fc.appendChild($(`<div class="slider-row">
-     <div class="ends"><span>Ticket \u00A35</span><span>\u00A360</span></div></div>`));
-   const tp=$(`<input type="range" min="5" max="60" value="${G.ticketPrice}">`);
+     <div class="ends"><span>Ticket \u00A35</span><span>\u00A3500</span></div></div>`));
+   const tp=$(`<input type="range" min="5" max="500" value="${G.ticketPrice}">`);
    const tpl=$(`<div class="small center">Ticket price: <b class="gold">\u00A3${G.ticketPrice}</b> \u00B7 est. attendance ${attendance(t).toLocaleString()}/${effCapacity(t).toLocaleString()}</div>`);
    tp.oninput=()=>{G.ticketPrice=+tp.value;
      tpl.innerHTML=`Ticket price: <b class="gold">\u00A3${G.ticketPrice}</b> \u00B7 est. attendance ${attendance(t).toLocaleString()}/${effCapacity(t).toLocaleString()}`};
@@ -3078,14 +3124,16 @@ function viewOffice(w){
  // ---- stadium ----
  const stad=$(`<div class="card"></div>`);
  stad.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">Stadium</h3>`));
- stad.appendChild($(`<div class="small muted" style="margin-bottom:8px">Capacity ${t.capacity.toLocaleString()}${t.building>0?` \u00B7 <span style="color:var(--loss)">temporary ground this season (${effCapacity(t).toLocaleString()})</span>`:""} \u00B7 Level ${t.stadiumLevel}/3</div>`));
+ stad.appendChild($(`<div class="small muted" style="margin-bottom:8px">Capacity ${t.capacity.toLocaleString()}${t.building>0?` \u00B7 <span style="color:var(--loss)">temporary ground (${effCapacity(t).toLocaleString()})</span>`:""} \u00B7 Level ${t.stadiumLevel}/${STADIUM_TIERS.length}</div>`));
  if(t.building>0){
-   stad.appendChild($(`<div class="small">Construction under way. It completes at season's end, adding ${(t.pendingSeats||0).toLocaleString()} seats. Gate income is reduced while you play in the temporary ground.</div>`));
- }else if(t.stadiumLevel>=3){
+   stad.appendChild($(`<div class="small">Construction under way \u2014 ${t.building} season${t.building===1?"":"s"} of temporary ground left, then ${(t.pendingSeats||0).toLocaleString()} seats are added. Gate income is reduced while you play in the temporary ground.</div>`));
+ }else if(t.stadiumLevel>=STADIUM_TIERS.length){
    stad.appendChild($(`<div class="small gold">Maximum stadium size reached.</div>`));
  }else{
    const plan=STADIUM_TIERS[t.stadiumLevel];
-   stad.appendChild($(`<div class="small" style="margin-bottom:8px">Next: <b>${plan.label}</b> for ${money(plan.cost)}. You play in a reduced-capacity temporary ground for one season, then reopen bigger.</div>`));
+   const dur=(plan.years||1)===1?"one season":`${plan.years} seasons`;
+   const size=plan.target?`up to ${plan.target.toLocaleString()} capacity`:`+${plan.addSeats.toLocaleString()} seats`;
+   stad.appendChild($(`<div class="small" style="margin-bottom:8px">Next: <b>${plan.label}</b> for ${money(plan.cost)} (${size}). You play in a reduced-capacity temporary ground for ${dur}, then reopen bigger.</div>`));
    const bb=$(`<button class="btn ${t.budget>=plan.cost?'':'sec'}">Begin ${plan.label} \u00B7 ${money(plan.cost)}</button>`);
    bb.disabled=t.budget<plan.cost;
    bb.onclick=()=>startStadiumBuild();
@@ -3097,6 +3145,8 @@ function viewOffice(w){
  const scc=$(`<div class="card"></div>`);
  const cc=$(`<div class="card"></div>`);
  cc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Head coach</h3>`));
+ if(inWindow()&&(!G.coach||G.coachRenewal))
+   cc.appendChild($(`<div class="small" style="margin-bottom:8px;padding:8px;border:1px solid var(--loss);border-radius:8px;color:var(--loss)"><b>${!G.coach?"You have no head coach.":"Your coach\u2019s contract has expired."}</b> ${!G.coach?"Hire one below before the season starts, or you run the team yourself.":"Renew below, or he walks the moment the season begins."}</div>`));
  if(G.coach){
    const c=G.coach,tr=COACH_TRAITS[c.trait];
    cc.appendChild($(`<div style="margin-bottom:8px">
@@ -3394,9 +3444,9 @@ function viewCup(w){
  if(anyHist){
    const hc=$(`<div class="card"></div>`);
    hc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Cup history</h3>`));
-   const tabs=[["world",WORLD_CUP.replace("The ",""),G.cups.world.length],
+   const tabs=[["world","World",G.cups.world.length],
                ["tippy","Tippy",(G.cups.tippy||[]).length],
-               ["continental",CONT_CUP.replace("The ",""),G.cups.continental.length],
+               ["continental","Conrad",G.cups.continental.length],
                ["regional","Regional",G.cups.regional.length]].filter(t=>t[2]>0);
    if(!tabs.find(t=>t[0]===CUPHIST_TAB))CUPHIST_TAB=tabs[0][0];
    const row=$(`<div class="row" style="gap:6px;margin-bottom:8px"></div>`);
@@ -3489,7 +3539,7 @@ function viewWorldTeam(w,id){
  const back=$(`<button class="btn sec sm" style="margin-bottom:10px">\u2190 All clubs</button>`);
  back.onclick=()=>{WORLD_TEAM=null;render()};w.appendChild(back);
  w.appendChild($(`<div class="card"><div class="row"><h2 style="font-size:19px">${t.name}</h2>${tierTag(t)}</div>
-   <div class="small muted">${regionOf(t.region).name} \u00B7 ${(t.capacity/1000).toFixed(0)}k seats \u00B7 ${money(t.budget)} budget</div>
+   <div class="small muted">${regionOf(t.region).name} \u00B7 ${(t.capacity/1000).toFixed(0)}k seats${t.building>0?` <span style="color:var(--loss)">(expanding \u2014 ${t.building} yr${t.building===1?"":"s"} left)</span>`:""} \u00B7 ${money(t.budget)} budget</div>
    <div class="small" style="margin-top:4px">Prestige: <b class="gold">${prestigeLabel(t.prestige||0)}</b> (${Math.round(t.prestige||0)}/100) \u00B7 ${prestigeRank(t.id,globalPrestige())} of ${G.teams.length} in the universe</div></div>`));
  if(!me){
    const tc=$(`<div class="card"></div>`);
