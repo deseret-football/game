@@ -1485,11 +1485,12 @@ function playCupRound(){
      if(h===G.userTeam||a===G.userTeam){
        const home=h===G.userTeam;
        cupUserRecord(CUP_KO_MARKS[c.koStage],home?hg:ag,home?ag:hg,pens);
+       const isFinal=c.koStage===KO_NAMES.length-1;   // last round is the final
        if(wnr===G.userTeam){const prize=KO_PRIZE[c.koStage];T(G.userTeam).budget+=prize;
-         logAdd(`${CUP}: won the ${KO_NAMES[c.koStage]}.`,prize);
-         if(!QUIET)toast(`${CUP} ${KO_NAMES[c.koStage]}: ${line} \u2014 you advance! +${money(prize)}`);}
-       else{c.userOut=true;logAdd(`${CUP}: knocked out in the ${KO_NAMES[c.koStage]}.`);
-         if(!QUIET)toast(`${CUP} ${KO_NAMES[c.koStage]}: ${line} \u2014 you are out.`);}
+         logAdd(`${CUP}: ${isFinal?"CHAMPIONS \u2014 the cup is yours!":"won the "+KO_NAMES[c.koStage]+"."}`,prize);
+         if(!QUIET)toast(`${CUP} ${KO_NAMES[c.koStage]}: ${line} \u2014 ${isFinal?"you win the cup!":"you advance!"} +${money(prize)}`);}
+       else{c.userOut=true;logAdd(`${CUP}: ${isFinal?"beaten in the final \u2014 runner-up.":"knocked out in the "+KO_NAMES[c.koStage]+"."}`);
+         if(!QUIET)toast(`${CUP} ${KO_NAMES[c.koStage]}: ${line} \u2014 ${isFinal?"you are the cup runner-up.":"you are out."}`);}
      }
    }
    c.koAlive=winners;c.koStage++;
