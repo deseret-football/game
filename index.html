@@ -3410,10 +3410,12 @@ function viewCup(w){
  if(G.lastTippy){
    const tc=G.lastTippy;
    tpc.appendChild($(`<div class="small" style="margin-bottom:4px">Reigning champion (Season ${tc.season}): <b class="gold">${tc.champion}</b></div>`));
-   tpc.appendChild($(`<div class="small muted" style="margin-bottom:4px">Tap an area to see their 20-man squad:</div>`));
-   const areaRow=$(`<div class="row" style="flex-wrap:wrap;gap:4px;margin-bottom:8px"></div>`);
-   Object.keys(tc.squads||{}).forEach(area=>{
-     const btn=$(`<button class="btn sm ${area===tc.champion?'':'sec'}">${area===tc.champion?'\u2728 ':''}${area}</button>`);
+   tpc.appendChild($(`<div class="small muted" style="margin-bottom:6px">Tap an area to see their 20-man squad:</div>`));
+   const areaRow=$(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px"></div>`);
+   const orderedAreas=TIPPY_AREAS.filter(a=>tc.squads&&tc.squads[a]);
+   orderedAreas.forEach(area=>{
+     const isChamp=area===tc.champion;
+     const btn=$(`<button class="btn sm ${isChamp?'':'sec'}" style="width:100%">${isChamp?'\u2728 ':''}${area}</button>`);
      btn.onclick=()=>{
        const old=tpc.querySelector('.tp-squad');if(old)old.remove();
        const sq=$(`<div class="tp-squad card" style="margin-top:8px;padding:8px 10px"></div>`);
