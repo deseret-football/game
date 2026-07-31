@@ -164,7 +164,7 @@ const REGION_CLUBS={
   "Princeville FC","Hanalei United","Kilauea Town","Anahola Rovers","Kapaa City",
   "Wailua Falls FC","Lihue United","Nawiliwili FC","Kealia Athletic","Moloaa Town"],
  founders:["Tralalero FC","Bombardiro United","Tung Tung City","Cappuccino Rovers","Ballerina Athletic",
-  "Lirili Larila FC","Chimpanzini United","Brr Patapim Town","Boneca City","Trippi Troppi United",
+  "Lirili Larila FC","Chimpanzini United","Brr Patapim Town","Jimothy Fury","Trippi Troppi United",
   "Crocodilo FC","Sahur Rovers","Bananini City","Assassino United","Frigo Camelo FC",
   "Bombombini Town","Papas Gatatas United","Bri Bri FC","Glorbo Fruttodrillo City","Tigrullini Rovers",
   "Orcalero FC","Trulimero United","Bobrito Bandito Town","Matteo City","Cocofanto FC",
@@ -444,6 +444,8 @@ function staffWage(){let s=0;for(const r in G.myStaff){const st=G.myStaff[r];if(
  if(G.scoutTier)s+=SCOUT_TIERS[G.scoutTier].wage;
  if(G.superScout)s+=Math.round(SUPER_SCOUT_COST/SEASON_LEN); // £5M/yr over the season's matchdays
  if(G.ticketManager)s+=TICKET_MGR_WAGE;
+ {const ut=T(G.userTeam);if(ut&&ut.supporters)s+=Math.round(SUPPORTER_COST/SEASON_LEN);}
+ if(G.liaison)s+=LIAISON_WAGE;
  if(G.coach)s+=G.coach.wage;
  return s;}
 function myStars(role){const s=G.myStaff&&G.myStaff[role];return s?s.stars:0;}
@@ -480,6 +482,7 @@ function genWorld(ownerName){
        budget:Math.round(tier===0?rnd(4e6,8e6):tier===1?rnd(1.5e6,3e6):rnd(.6e6,1.2e6)),
        capacity:Math.round(tier===0?rnd(15000,22000):tier===1?rnd(7000,11000):rnd(3000,5500)),
        stadiumLevel:0,building:0,leagueTitles:0,cupTitles:0,contTitles:0,leagueTitleSeasons:[],
+       supporters:false,jet:false,jetMaint:"none",facility:0,facilityMaint:"none",facilityBoughtSeason:0,sponsor:null,
        prestige:Math.round(tier===0?rnd(38,52):tier===1?rnd(20,30):rnd(8,16)),
        trait:assignTrait(tier),st:blankStd()};
      teams.push(t);return t;});
@@ -509,7 +512,8 @@ function genWorld(ownerName){
     tierTeams:null,fixtures:makeFixtures(PER_TIER),lastResults:null,
     formation:"4-4-2",xi:null,tactics:{mentality:50,pressing:50,tempo:50,width:50,line:50},
     ticketPrice:20,finance:null,log:[],history:[],cup:null,results:[],
-    cups:{regional:[],continental:[],world:[],tippy:[]},wcYearsLeft:4,tippyYearsLeft:2,_clubIdx:clubIdx};
+    cups:{regional:[],continental:[],world:[],tippy:[]},wcYearsLeft:4,tippyYearsLeft:2,
+    liaison:false,liaisonCycle:null,gbLog:[],_clubIdx:clubIdx};
  rebuildIndex();rebuildTierTeams();
  G.coachPool=genCoachPool();
 }
@@ -570,6 +574,9 @@ function hydrateLoadedG(){
  if(!G.results)G.results=[];
  if(!G.cups)G.cups={regional:[],continental:[],world:[],tippy:[]};
  if(!G.cups.tippy)G.cups.tippy=[];
+ if(G.liaison===undefined)G.liaison=false;
+ if(G.liaisonCycle===undefined)G.liaisonCycle=null;
+ if(!G.gbLog)G.gbLog=[];
  if(!G.news)G.news=[];
  if(G.wcYearsLeft==null)G.wcYearsLeft=4;
  if(G.tippyYearsLeft==null){let ty=(G.wcYearsLeft||4)-2;if(ty<=0)ty+=4;G.tippyYearsLeft=ty;}
@@ -600,6 +607,10 @@ function hydrateLoadedG(){
  G.staffPool=(G.staffPool||[]).filter(s=>!!STAFF_ROLES[s.role]); // drop orphaned roles
  G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
    if(!t.leagueTitleSeasons)t.leagueTitleSeasons=[];
+   if(t.supporters===undefined)t.supporters=false;
+   if(t.jet===undefined){t.jet=false;t.jetMaint="none";}
+   if(t.facility===undefined){t.facility=0;t.facilityMaint="none";t.facilityBoughtSeason=0;}
+   if(t.sponsor===undefined)t.sponsor=null;
    if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
    if(!t.trait)t.trait=assignTrait(t.tier);});
  {const ut=T(G.userTeam);
@@ -920,7 +931,7 @@ function attributeGoals(xi,n){
 }
 function playTie(h,a,adv){
  const hXI=teamXI(h),aXI=teamXI(a);
- const[hg,ag]=simMatch(hXI,aXI,teamTac(h),teamTac(a),teamBoost(h),teamBoost(a),adv);
+ const[hg,ag]=simMatch(hXI,aXI,teamTac(h),teamTac(a),teamBoost(h,true),teamBoost(a,false),adv);
  [...hXI,...aXI].forEach(p=>{p.as=(p.as||0)+1;p.ac=(p.ac||0)+1});
  return{hg,ag,hs:attributeGoals(hXI,hg),asc:attributeGoals(aXI,ag)};
 }
@@ -964,12 +975,16 @@ function teamTac(id){
  if(t&&t.trait==="attacking")return AI_ATT;
  if(t&&t.trait==="defensive")return AI_DEF;
  return NEU;}
-function teamBoost(id){
- if(id===G.userTeam)return coachInfo().boost;
- // AI clubs carry an implicit coaching setup scaled by their level, so the
- // user's Elite Coach is an edge over peers, not a monopoly on coaching.
- const t=T(id);if(!t)return 0;
- return[1.6,0.8,0.4][t.tier]||0.4;
+function teamBoost(id,home){
+ const t=T(id);
+ // base coaching edge (user's real coach; AI carries an implicit setup by level)
+ let b = (id===G.userTeam) ? coachInfo().boost : (t?([1.6,0.8,0.4][t.tier]||0.4):0);
+ if(!t)return b;
+ // Office assets, available to every club: supporters lift the side at home, the
+ // team jet keeps them fresh on the road. 'home' is undefined for neutral estimates.
+ if(home===true && hasSupporters(t)) b+=SUPPORTER_BOOST;
+ if(home===false && jetActive(t)) b+=JET_BOOST;
+ return b;
 }
 function applyResult(h,a,hg,ag){
  const H=T(h).st,A=T(a).st;
@@ -1143,6 +1158,161 @@ function secondaryMarket(){
 }
 /* Richer, higher-prestige, higher-division AI clubs break ground on their own
    grounds and keep a cash buffer in reserve, so the mega tier is not user-only. */
+/* AI clubs pay upkeep on their Office assets (or lose the benefit) and, when flush,
+   invest in new ones — supporters, a team jet, and training facilities (bought in
+   Bronze->Silver->Gold order, one a season) — so these perks are not user-only. */
+function aiFacilitiesTick(){
+ G.teams.forEach(t=>{
+   if(t.id===G.userTeam)return;
+   // upkeep for the coming season (auto-pay if affordable, else benefit lapses)
+   if(t.supporters){if(t.budget>=SUPPORTER_COST)t.budget-=SUPPORTER_COST;else t.supporters=false;}
+   if(t.jet){if(t.budget>=JET_MAINT){t.budget-=JET_MAINT;t.jetMaint="paid";}else t.jetMaint="rejected";}
+   if((t.facility||0)>0){const m=facilityMaintCost(t.facility);
+     if(t.budget>=m){t.budget-=m;t.facilityMaint="paid";}else t.facilityMaint="rejected";}
+   // occasional investment, buffer-protected and weighted by prestige
+   const pd=(t.prestige||0)/100;
+   if(!t.supporters&&t.budget>=SUPPORTER_COST*10&&Math.random()<0.05+pd*0.15)t.supporters=true;
+   if(!t.jet&&t.budget>=JET_COST*1.4&&Math.random()<0.03+pd*0.10){t.budget-=JET_COST;t.jet=true;t.jetMaint="paid";}
+   if((t.facility||0)<3&&(t.facilityBoughtSeason||0)!==G.season){
+     const nx=(t.facility||0)+1,cost=facilityCost(nx);
+     if(t.budget>=cost*1.4&&Math.random()<0.03+pd*0.08){
+       t.budget-=cost;t.facility=nx;t.facilityMaint="paid";t.facilityBoughtSeason=G.season;}
+   }
+ });
+}
+/* ================= Shoe brand sponsorships =================
+   Six brands (two per tier), three club slots each = 18 deals shared between the
+   user and AI. Deals run 10 seasons, pay a yearly value plus a one-year signing
+   bonus, and carry four cumulative targets; hit 3 of 4 to keep the brand happy.
+   A soft mid-term review at season 5 drops the PAYMENT a tier if badly off pace
+   (money already paid is always kept). The user explores via a hired liaison. */
+const SHOE_TIERS={
+ gold:  {name:"Gold",  value:10000000, prestige:65, targets:{conrad:3,gb:3,regional:5,league:5},
+         brands:[{key:"atreides",name:"Atreides"},{key:"arrakis",name:"Arrakis"}]},
+ silver:{name:"Silver",value:4000000,  prestige:45, targets:{conrad:1,gb:2,regional:3,league:3},
+         brands:[{key:"navi",name:"Navi"},{key:"eywa",name:"Eywa"}]},
+ bronze:{name:"Bronze",value:1500000,  prestige:20, targets:{conrad:1,gb:1,regional:1,league:2},
+         brands:[{key:"patronus",name:"Patronus"},{key:"skywalker",name:"Skywalker"}]}};
+const SHOE_TIER_ORDER=["bronze","silver","gold"];
+const SHOE_SLOTS=3;              // clubs per brand
+const SHOE_DEAL_LEN=10;         // seasons
+const LIAISON_WAGE=25000;       // £/wk
+const SHOE_KEYS=["conrad","gb","regional","league"];
+function brandInfo(key){for(const tk in SHOE_TIERS){const b=SHOE_TIERS[tk].brands.find(x=>x.key===key);if(b)return{key,name:b.name,tier:tk};}return null;}
+function brandHolders(key){return G.teams.filter(t=>t.sponsor&&t.sponsor.brand===key);}
+function shoeMark(t){return t&&t.sponsor?` <span class="shoe" title="${brandInfo(t.sponsor.brand).name} \u00B7 ${SHOE_TIERS[t.sponsor.tier].name} tier">\uD83D\uDC5F</span>`:"";}
+function openBrandInTier(tier){return SHOE_TIERS[tier].brands.find(b=>brandHolders(b.key).length<SHOE_SLOTS)||null;}
+function shoeRecent(t,win){const s=G.season-(win||6);return{
+ conrad:(G.cups.continental||[]).filter(e=>e.winner===t.name&&e.region===t.region&&e.season>=s).length,
+ regional:(G.cups.regional||[]).filter(e=>e.winner===t.name&&e.region===t.region&&e.season>=s).length,
+ league:(t.leagueTitleSeasons||[]).filter(x=>x>=s).length,
+ gb:(G.gbLog||[]).filter(e=>e.team===t.id&&e.season>=s).length};}
+function shoeResume(t){const r=shoeRecent(t,6);return(t.prestige||0)+r.conrad*15+r.regional*6+r.league*8+r.gb*5;}
+function shoeQualifies(t,tier){
+ const pres=t.prestige||0,r=shoeRecent(t,6);
+ if(tier==="gold")  return pres>=SHOE_TIERS.gold.prestige   &&(r.conrad>=1||r.league>=2);
+ if(tier==="silver")return pres>=SHOE_TIERS.silver.prestige &&(pres>=55||(r.conrad+r.regional+r.league+r.gb)>=1);
+ if(tier==="bronze")return pres>=SHOE_TIERS.bronze.prestige;
+ return false;}
+function shoeBestTier(t){for(const tier of["gold","silver","bronze"])if(shoeQualifies(t,tier))return tier;return null;}
+function dealProgress(t){
+ if(!t.sponsor)return{conrad:0,gb:0,regional:0,league:0};
+ const s=t.sponsor.start;return{
+  conrad:(G.cups.continental||[]).filter(e=>e.winner===t.name&&e.region===t.region&&e.season>=s).length,
+  regional:(G.cups.regional||[]).filter(e=>e.winner===t.name&&e.region===t.region&&e.season>=s).length,
+  league:(t.leagueTitleSeasons||[]).filter(x=>x>=s).length,
+  gb:(G.gbLog||[]).filter(e=>e.team===t.id&&e.season>=s).length};}
+function dealTargetsMet(t){if(!t.sponsor)return 0;const tg=SHOE_TIERS[t.sponsor.tier].targets,pr=dealProgress(t);
+ return SHOE_KEYS.filter(k=>pr[k]>=tg[k]).length;}
+function signDeal(t,brandKey,startSeason){
+ const bi=brandInfo(brandKey);if(!bi)return;
+ t.sponsor={brand:brandKey,tier:bi.tier,payTier:bi.tier,start:startSeason,mid:false};
+ const bonus=SHOE_TIERS[bi.tier].value;t.budget+=bonus;
+ if(t.id===G.userTeam)logAdd(`Signed a ${SHOE_TIERS[bi.tier].name}-tier shoe deal with ${bi.name}! Signing bonus ${money(bonus)}.`,bonus);}
+function endDeal(t){t.sponsor=null;}
+/* Runs each season end (before the season counter ticks): pays every deal, runs the
+   mid-term and final reviews, expires 10-year deals, then lets AI fill open slots and
+   advances the user's liaison cycle. */
+function sponsorTick(){
+ G.teams.forEach(t=>{
+   if(!t.sponsor)return;
+   const d=t.sponsor,played=(G.season-d.start+1);
+   if(played<1)return;                       // signed for next season, not yet active
+   t.budget+=SHOE_TIERS[d.payTier].value;     // annual payment (payTier may be downgraded)
+   if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} shoe deal: annual payment.`,SHOE_TIERS[d.payTier].value);
+   if(played===5&&!d.mid){                    // soft mid-term review
+     d.mid=true;const tg=SHOE_TIERS[d.tier].targets,pr=dealProgress(t);
+     const onPace=SHOE_KEYS.filter(k=>pr[k]>=Math.ceil(tg[k]/2)).length>=3;
+     if(!onPace){const lower=SHOE_TIER_ORDER[Math.max(0,SHOE_TIER_ORDER.indexOf(d.tier)-1)];
+       if(lower!==d.payTier){d.payTier=lower;
+         if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} mid-term review: off pace \u2014 payments cut to ${SHOE_TIERS[lower].name} rate for the rest of the deal.`);}}
+     else if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} mid-term review: on pace \u2014 full payments continue.`);
+   }
+   if(played>=SHOE_DEAL_LEN){                 // final review + expiry
+     const met=dealTargetsMet(t);
+     if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} deal ended: ${met}/4 targets met \u2014 ${met>=3?"they would happily re-sign you.":"they walk away."}`);
+     endDeal(t);
+   }
+ });
+ aiSponsorFill();
+ userLiaisonTick();
+}
+function aiSponsorFill(){
+ for(const tier of["gold","silver","bronze"]){
+   SHOE_TIERS[tier].brands.forEach(b=>{
+     let open=SHOE_SLOTS-brandHolders(b.key).length;
+     while(open>0){
+       const cand=G.teams.filter(t=>t.id!==G.userTeam&&!t.sponsor&&shoeQualifies(t,tier))
+         .sort((x,y)=>shoeResume(y)-shoeResume(x))[0];
+       if(!cand)break;
+       signDeal(cand,b.key,G.season+1);       // AI deals begin next season
+       open--;
+     }
+   });
+ }
+}
+/* ---- user liaison cycle: evaluate a season, then pitch ---- */
+function startLiaisonEval(){G.liaisonCycle={phase:"evaluating",since:G.season};}
+function buildShoeOffers(t){
+ const offers=[];
+ for(const tier of["gold","silver","bronze"]){
+   if(!shoeQualifies(t,tier))continue;
+   const open=openBrandInTier(tier);
+   if(open){offers.push({tier,brand:open.key,bump:null});}
+   else{
+     const holders=[];SHOE_TIERS[tier].brands.forEach(b=>brandHolders(b.key).forEach(h=>holders.push(h)));
+     const weakest=holders.sort((a,b)=>shoeResume(a)-shoeResume(b))[0];
+     if(weakest&&shoeResume(t)>shoeResume(weakest))offers.push({tier,brand:weakest.sponsor.brand,bump:weakest.id});
+   }
+ }
+ return offers;
+}
+function userLiaisonTick(){
+ const t=userTeamObj();if(!t)return;
+ if(!G.liaison){G.liaisonCycle=null;return;}
+ if(t.sponsor){G.liaisonCycle=null;return;}          // deal active: no cycle
+ if(!G.liaisonCycle){startLiaisonEval();return;}      // (re)start after a deal ends
+ if(G.liaisonCycle.phase==="evaluating"){
+   const offers=buildShoeOffers(t);
+   if(offers.length)G.liaisonCycle={phase:"offered",offers,since:G.season};
+   else{G.liaisonCycle={phase:"evaluating",since:G.season};
+     logAdd("Shoe brands passed this year \u2014 the liaison keeps working.");}
+ }else if(G.liaisonCycle.phase==="offered"){
+   G.liaisonCycle={phase:"evaluating",since:G.season};  // an ignored pitch lapses
+ }
+}
+function hireLiaison(){G.liaison=true;
+ if(!userTeamObj().sponsor&&!G.liaisonCycle)startLiaisonEval();
+ logAdd(`Hired a shoe brand liaison (${money(LIAISON_WAGE)}/wk) \u2014 they begin a season-long evaluation.`);saveGame(true);render();}
+function fireLiaison(){G.liaison=false;G.liaisonCycle=null;logAdd("Released the shoe brand liaison.");saveGame(true);render();}
+function acceptShoeOffer(idx){
+ const t=userTeamObj();if(!t||!G.liaisonCycle||G.liaisonCycle.phase!=="offered")return;
+ const o=G.liaisonCycle.offers[idx];if(!o)return;
+ if(o.bump){const bumped=T(o.bump);if(bumped)endDeal(bumped);}
+ signDeal(t,o.brand,G.season);                        // user deal starts this upcoming season
+ G.liaisonCycle=null;saveGame(true);render();}
+function declineShoeOffers(){G.liaisonCycle={phase:"evaluating",since:G.season};
+ logAdd("Turned down this year\u2019s shoe pitch.");saveGame(true);render();}
 function aiStadiumTick(){
  G.teams.forEach(t=>{
    if(t.id===G.userTeam||t.building>0||(t.stadiumLevel||0)>=STADIUM_TIERS.length)return;
@@ -1168,6 +1338,34 @@ function startStadiumBuild(){
  logAdd(`Stadium ${plan.label} begun. Playing in ${dur}.`,-plan.cost);
  saveGame(true);render();
 }
+/* ---- Office asset actions (user) ---- */
+function hireSupporters(){const t=userTeamObj();if(!t)return;t.supporters=true;
+ logAdd(`Hired a supporters\u2019 club coordinator (${money(SUPPORTER_COST)}/yr).`);saveGame(true);render();}
+function dismissSupporters(){const t=userTeamObj();if(!t)return;t.supporters=false;
+ logAdd("Released the supporters\u2019 club coordinator.");saveGame(true);render();}
+function buyJet(){const t=userTeamObj();if(!t)return;
+ if(t.jet)return toast("You already own a team jet.");
+ if(t.budget<JET_COST)return toast(`Need ${money(JET_COST)} to buy the jet.`);
+ t.budget-=JET_COST;t.jet=true;t.jetMaint="paid";           // first year's boost included
+ logAdd(`Bought a team jet for ${money(JET_COST)}.`,-JET_COST);saveGame(true);render();}
+function payJetMaint(){const t=userTeamObj();if(!t||!t.jet)return;
+ if(t.budget<JET_MAINT)return toast(`Need ${money(JET_MAINT)} for jet upkeep.`);
+ t.budget-=JET_MAINT;t.jetMaint="paid";logAdd("Paid team jet upkeep.",-JET_MAINT);saveGame(true);render();}
+function declineJetMaint(){const t=userTeamObj();if(!t)return;t.jetMaint="rejected";
+ logAdd("Declined team jet upkeep \u2014 no away boost this season.");saveGame(true);render();}
+function buyFacility(){const t=userTeamObj();if(!t)return;
+ if((t.facility||0)>=3)return toast("You already own the Gold training facility.");
+ if((t.facilityBoughtSeason||0)===G.season)return toast("Only one training facility upgrade per season.");
+ const nx=(t.facility||0)+1,cost=facilityCost(nx);
+ if(t.budget<cost)return toast(`Need ${money(cost)} for the ${FACILITY_TIERS[nx].short} facility.`);
+ t.budget-=cost;t.facility=nx;t.facilityMaint="paid";t.facilityBoughtSeason=G.season;
+ logAdd(`Built the ${FACILITY_TIERS[nx].label} for ${money(cost)}.`,-cost);saveGame(true);render();}
+function payFacilityMaint(){const t=userTeamObj();if(!t||(t.facility||0)<1)return;
+ const m=facilityMaintCost(t.facility);
+ if(t.budget<m)return toast(`Need ${money(m)} for facility upkeep.`);
+ t.budget-=m;t.facilityMaint="paid";logAdd("Paid training facility upkeep.",-m);saveGame(true);render();}
+function declineFacilityMaint(){const t=userTeamObj();if(!t)return;t.facilityMaint="rejected";
+ logAdd("Declined training facility upkeep \u2014 no development boost this season.");saveGame(true);render();}
 function sponsorWeekly(t){
  const base=[90000,40000,18000][t.tier];
  return Math.round(base*(1+repOf(t))*(1+.1*myStars("commercial")));}
@@ -1573,6 +1771,7 @@ function endSeason(){
      const nt={id:e.id,region:r.key,name:e.name,tier:2,squad:[],
        budget:Math.round(rnd(.6e6,1.2e6)),capacity:Math.round(rnd(3000,5500)),
        stadiumLevel:0,building:0,leagueTitles:e.leagueTitles||0,cupTitles:e.cupTitles||0,contTitles:e.contTitles||0,leagueTitleSeasons:e.leagueTitleSeasons||[],
+       supporters:false,jet:false,jetMaint:"none",facility:0,facilityMaint:"none",facilityBoughtSeason:0,sponsor:null,
        prestige:e.prestige||8,trait:e.trait||assignTrait(2),st:blankStd()};
      G.teams.push(nt);
      G.expansion=G.expansion.filter(x=>x.id!==e.id);
@@ -1588,6 +1787,7 @@ function endSeason(){
      .sort((a,b)=>(b.gs||0)-(a.gs||0));
    const w=scorers[0];if(!w)return;
    w.gbWins=(w.gbWins||0)+1;
+   (G.gbLog=G.gbLog||[]).push({season:G.season,team:w.team});   // club that took this region's Boot
    G._bootWinners.push({region:r.key,id:w.id,name:w.name,goals:w.gs,
      club:T(w.team)?T(w.team).name:"a free agent",wins:w.gbWins});
  });
@@ -1619,6 +1819,11 @@ function endSeason(){
  // world's stadiums grow over the years. Run AFTER the completion loop so a build
  // started this season serves its full term.
  aiStadiumTick();
+ // Office asset upkeep for the coming season: the user must decide (pending) in the
+ // window; AI clubs auto-pay if they can afford it, and invest in new assets over time.
+ {const ut=userTeamObj();
+  if(ut){if((ut.facility||0)>0)ut.facilityMaint="pending";if(ut.jet)ut.jetMaint="pending";}}
+ aiFacilitiesTick();
  // simulate cups for the other two regions so cupTitles stay accurate
  {const ureg2=userRegionKey();
   REGIONS.forEach(r=>{if(r.key!==ureg2)simulateRegionalCup(r.key,RT);});}
@@ -1636,6 +1841,7 @@ function endSeason(){
  coachSeasonTick();
  G.teams.forEach(t=>t.st=blankStd());
  rebuildTierTeams();
+ sponsorTick();
  G.matchday=0;G.season++;G.lastResults=null;G.xi=null;G.results=[];
  G.scouted={};G.refused={};G.window={day:1,offersMade:0};G.offers=[];genOffers();
  G.superShort=null;if(G.superScout)buildSuperShortlist();
@@ -2022,6 +2228,14 @@ function ageAndRenew(){
      const order=shuffle(_at.slice());
      for(let i=0;i<xp;i++)p[order[i%order.length]]=clamp(p[order[i%order.length]]+1,18,99);
    }
+   // A training facility accelerates the under-23s. Higher tiers develop faster
+   // (Bronze/Silver/Gold). setOvr caps OVR at potential, so this only speeds a
+   // prospect toward his ceiling; the benefit needs upkeep paid to apply.
+   if(_c&&(_c.facility||0)>0&&facilityActive(_c)&&p.age<23){
+     const bump=[0,1,2,3][_c.facility]||0;      // Bronze 1 .. Gold 3
+     const n=ri(0,bump),ord=shuffle(_at.slice());
+     for(let i=0;i<n;i++)p[ord[i%ord.length]]=clamp(p[ord[i%ord.length]]+1,18,99);
+   }
    setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
    if(p.age>40)retiring.push(p);
  });
@@ -2234,6 +2448,22 @@ function genOffers(){
 function p_tierPref(p){return p.ovr>=80?0:p.ovr>=68?1:2;}
 const SUPER_SCOUT_COST=5000000;
 const TICKET_MGR_WAGE=15000;   // weekly cost of the automated ticket-pricing manager
+/* ---- Office assets: supporter coordinator, team jet, training facility. All are
+   available to AI clubs too (they buy in over time and pay upkeep from budget). ---- */
+const SUPPORTER_COST=200000;   // £/yr ongoing wage; modest HOME attack boost
+const SUPPORTER_BOOST=0.6;
+const JET_COST=200000000;      // £200M one-off; £10M/yr upkeep; modest AWAY boost
+const JET_MAINT=10000000;
+const JET_BOOST=0.6;
+const FACILITY_TIERS=[null,    // index 0 = none; 1 Bronze, 2 Silver, 3 Gold. Upkeep 5%/yr.
+ {label:"Bronze training facility",short:"Bronze",cost:100000000},
+ {label:"Silver training facility",short:"Silver",cost:250000000},
+ {label:"Gold training facility",short:"Gold",cost:500000000}];
+function facilityCost(tier){return FACILITY_TIERS[tier]?FACILITY_TIERS[tier].cost:0;}
+function facilityMaintCost(tier){return Math.round(facilityCost(tier)*0.05);}
+function hasSupporters(t){return !!(t&&t.supporters);}
+function jetActive(t){return !!(t&&t.jet&&t.jetMaint==="paid");}
+function facilityActive(t){return !!(t&&(t.facility||0)>0&&t.facilityMaint==="paid");}
 /* Scans every price and returns the one that maximises gate revenue for a given
    fixture (attendance falls as the price rises, so there is a revenue-maximising
    point). Restores G.ticketPrice before returning. */
@@ -2378,10 +2608,15 @@ function nav(){
    ["cup","\u2726","Cups"],["transfers","\u21C4","Market"],["world","\u25C9","World"],["office","\u270E","Office"]];
  // Warn (red) during the pre-season window when you are set to start the season with
  // no head coach: he retired, was poached, or his deal lapsed and he is about to walk.
+ // Warn (red) during the pre-season window when you are set to start the season with
+ // no head coach, or with unpaid upkeep pending on the training facility or team jet.
+ const _ut=userTeamObj();
  const coachAlert=inWindow()&&(!G.coach||!!G.coachRenewal);
+ const maintAlert=inWindow()&&!!_ut&&(((_ut.facility||0)>0&&_ut.facilityMaint==="pending")||(_ut.jet&&_ut.jetMaint==="pending"));
+ const coachOrMaint=coachAlert||maintAlert;
  const n=$(`<nav></nav>`);
  items.forEach(([k,ic,lab])=>{
-   const alert=(k==="office"&&coachAlert);
+   const alert=(k==="office"&&coachOrMaint);
    const b=$(`<button class="${TAB===k?'on':''}${alert?' alert':''}"><span class="ic">${ic}</span>${lab}</button>`);
    b.onclick=()=>{if(k!=="world")WORLD_TEAM=null;TAB=k;render()};n.appendChild(b);
  });
@@ -2889,7 +3124,7 @@ function leagueTable(regionKey,tier,mark){
    const gd=tm.st.GF-tm.st.GA;
    let cls=tm.id===G.userTeam&&mark?"me ":"";
    if(i<2)cls+="promo";else if(i>=8)cls+="releg";
-   return `<tr class="${cls}"><td class="l muted">${i+1}</td><td class="l">${tm.name}</td>`+
+   return `<tr class="${cls}"><td class="l muted">${i+1}</td><td class="l">${tm.name}${shoeMark(tm)}</td>`+
      `<td>${tm.st.P}</td><td>${tm.st.W}</td><td>${tm.st.D}</td><td>${tm.st.L}</td>`+
      `<td class="${gd>0?'res-w':gd<0?'res-l':''}">${gd>0?'+':''}${gd}</td>`+
      `<td class="gold"><b>${tm.st.Pts}</b></td></tr>`;
@@ -3142,6 +3377,117 @@ function viewOffice(w){
  }
  w.appendChild(stad);
 
+ // ---- Supporters' club coordinator ----
+ {const t=userTeamObj();
+  const sup=$(`<div class="card"></div>`);
+  sup.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Supporters\u2019 club</h3>`));
+  if(t.supporters){
+    sup.appendChild($(`<div class="small" style="margin-bottom:8px">A supporters\u2019 club coordinator is on staff \u00B7 ${money(SUPPORTER_COST)}/yr. Your crowd gives a modest boost in <b>home</b> matches.</div>`));
+    const b=$(`<button class="btn sm sec">Release coordinator</button>`);b.onclick=dismissSupporters;sup.appendChild(b);
+  }else{
+    sup.appendChild($(`<div class="small muted" style="margin-bottom:8px">Hire a supporters\u2019 club coordinator (${money(SUPPORTER_COST)}/yr) for a modest home-match boost \u2014 a louder, fuller ground.</div>`));
+    const b=$(`<button class="btn sm">Hire coordinator \u00B7 ${money(SUPPORTER_COST)}/yr</button>`);b.onclick=hireSupporters;sup.appendChild(b);
+  }
+  w.appendChild(sup);}
+
+ // ---- Training facility ----
+ {const t=userTeamObj();
+  const fac=$(`<div class="card"></div>`);
+  fac.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Training facility</h3>`));
+  const lvl=t.facility||0;
+  fac.appendChild($(`<div class="small muted" style="margin-bottom:8px">Speeds up development of your under-23 players \u2014 higher tiers, faster growth (capped by each prospect\u2019s potential). Current: <b class="gold">${lvl?FACILITY_TIERS[lvl].short:"None"}</b>${lvl?` \u00B7 upkeep ${money(facilityMaintCost(lvl))}/yr`:""}.</div>`));
+  if(lvl>0&&t.facilityMaint==="pending"&&inWindow()){
+    const m=facilityMaintCost(lvl);
+    const box=$(`<div style="margin-bottom:8px;padding:8px;border:1px solid var(--loss);border-radius:8px"></div>`);
+    box.appendChild($(`<div class="small" style="color:var(--loss)"><b>Facility upkeep due: ${money(m)}.</b> Pay it to keep the development boost this season, or decline and forgo it.</div>`));
+    const row=$(`<div class="row" style="gap:6px;margin-top:8px"></div>`);
+    const pay=$(`<button class="btn sm" style="flex:1">Pay ${money(m)}</button>`);pay.onclick=payFacilityMaint;
+    const dec=$(`<button class="btn sm sec" style="flex:1">Decline</button>`);dec.onclick=declineFacilityMaint;
+    row.appendChild(pay);row.appendChild(dec);box.appendChild(row);fac.appendChild(box);
+  }else if(lvl>0){
+    const paid=t.facilityMaint==="paid";
+    fac.appendChild($(`<div class="small" style="margin-bottom:8px;color:${paid?'var(--win)':'var(--loss)'}">${paid?"Upkeep paid \u2014 development boost active this season.":"Upkeep unpaid \u2014 no development boost this season."}</div>`));
+  }
+  if(lvl<3){
+    const nx=lvl+1,cost=facilityCost(nx),boughtThis=(t.facilityBoughtSeason||0)===G.season;
+    fac.appendChild($(`<div class="small" style="margin-bottom:8px">Next: <b>${FACILITY_TIERS[nx].label}</b> for ${money(cost)} (then ${money(facilityMaintCost(nx))}/yr upkeep). Facilities are bought Bronze \u2192 Silver \u2192 Gold, one per season.</div>`));
+    const bb=$(`<button class="btn sm ${t.budget>=cost&&!boughtThis?'':'sec'}">Build ${FACILITY_TIERS[nx].short} \u00B7 ${money(cost)}</button>`);
+    bb.disabled=t.budget<cost||boughtThis;
+    bb.onclick=buyFacility;fac.appendChild(bb);
+    if(boughtThis)fac.appendChild($(`<div class="small muted" style="margin-top:6px">Already invested in a facility this season \u2014 upgrade again next season.</div>`));
+  }else fac.appendChild($(`<div class="small gold">Gold facility \u2014 fastest development, fully upgraded.</div>`));
+  w.appendChild(fac);}
+
+ // ---- Team jet ----
+ {const t=userTeamObj();
+  const jet=$(`<div class="card"></div>`);
+  jet.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Team jet</h3>`));
+  if(t.jet){
+    jet.appendChild($(`<div class="small" style="margin-bottom:8px">A team jet keeps the squad fresh on the road \u2014 a modest boost in <b>away</b> matches \u00B7 upkeep ${money(JET_MAINT)}/yr.</div>`));
+    if(t.jetMaint==="pending"&&inWindow()){
+      const box=$(`<div style="margin-bottom:8px;padding:8px;border:1px solid var(--loss);border-radius:8px"></div>`);
+      box.appendChild($(`<div class="small" style="color:var(--loss)"><b>Jet upkeep due: ${money(JET_MAINT)}.</b> Pay it to keep the away boost this season, or decline and forgo it.</div>`));
+      const row=$(`<div class="row" style="gap:6px;margin-top:8px"></div>`);
+      const pay=$(`<button class="btn sm" style="flex:1">Pay ${money(JET_MAINT)}</button>`);pay.onclick=payJetMaint;
+      const dec=$(`<button class="btn sm sec" style="flex:1">Decline</button>`);dec.onclick=declineJetMaint;
+      row.appendChild(pay);row.appendChild(dec);box.appendChild(row);jet.appendChild(box);
+    }else{
+      const paid=t.jetMaint==="paid";
+      jet.appendChild($(`<div class="small" style="color:${paid?'var(--win)':'var(--loss)'}">${paid?"Upkeep paid \u2014 away boost active this season.":"Upkeep unpaid \u2014 no away boost this season."}</div>`));
+    }
+  }else{
+    jet.appendChild($(`<div class="small muted" style="margin-bottom:8px">Buy a team jet (${money(JET_COST)}, then ${money(JET_MAINT)}/yr upkeep) for a modest boost in away matches \u2014 less travel fatigue.</div>`));
+    const bb=$(`<button class="btn sm ${t.budget>=JET_COST?'':'sec'}">Buy team jet \u00B7 ${money(JET_COST)}</button>`);
+    bb.disabled=t.budget<JET_COST;bb.onclick=buyJet;jet.appendChild(bb);
+  }
+  w.appendChild(jet);}
+
+ // ---- Shoe sponsorship ----
+ {const t=userTeamObj();
+  const sp=$(`<div class="card"></div>`);
+  sp.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">\uD83D\uDC5F Shoe sponsorship</h3>`));
+  if(!G.liaison){
+    sp.appendChild($(`<div class="small muted" style="margin-bottom:8px">Hire a shoe brand liaison (${money(LIAISON_WAGE)}/wk) to chase a sponsorship. They spend a season being evaluated by the brands, then bring a pitch. Deals run ${SHOE_DEAL_LEN} seasons: a signing bonus plus a yearly fee, with cumulative on-field targets to keep the brand happy (hit 3 of 4). Tiers: Gold ${money(SHOE_TIERS.gold.value)}/yr, Silver ${money(SHOE_TIERS.silver.value)}/yr, Bronze ${money(SHOE_TIERS.bronze.value)}/yr.</div>`));
+    const b=$(`<button class="btn sm">Hire liaison \u00B7 ${money(LIAISON_WAGE)}/wk</button>`);b.onclick=hireLiaison;sp.appendChild(b);
+  }else if(t.sponsor){
+    const d=t.sponsor,bi=brandInfo(d.brand),tier=SHOE_TIERS[d.tier];
+    const year=clamp(G.season-d.start+1,1,SHOE_DEAL_LEN);
+    sp.appendChild($(`<div class="small" style="margin-bottom:4px">Sponsored by <b class="gold">${bi.name}</b> (${tier.name} tier) \u00B7 Year ${year} of ${SHOE_DEAL_LEN}</div>`));
+    const payNote=d.payTier!==d.tier?` <span style="color:var(--loss)">(cut to ${SHOE_TIERS[d.payTier].name} rate after the mid-term review)</span>`:"";
+    sp.appendChild($(`<div class="small muted" style="margin-bottom:6px">Pays ${money(SHOE_TIERS[d.payTier].value)}/yr${payNote}.</div>`));
+    const pr=dealProgress(t),met=dealTargetsMet(t);
+    const labels={conrad:"Conrad Cups",gb:"Golden Boots",regional:"Regional Cups",league:"League titles"};
+    const grid=$(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"></div>`);
+    SHOE_KEYS.forEach(k=>{const need=tier.targets[k],have=pr[k],ok=have>=need;
+      grid.appendChild($(`<div class="small" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px">${ok?'<span class="gold">\u2714</span> ':''}${labels[k]}<br><b class="${ok?'gold':''}">${have}</b> / ${need}</div>`));});
+    sp.appendChild(grid);
+    sp.appendChild($(`<div class="small" style="margin-bottom:4px">Targets met: <b class="${met>=3?'gold':''}">${met}/4</b> (need 3 of 4 to keep the deal).</div>`));
+    sp.appendChild($(`<div class="small muted">${!d.mid?`Mid-term review at Year 5 \u2014 fall badly off pace and payments drop a tier.`:(d.payTier!==d.tier?"Mid-term review passed: off pace, payments were reduced.":"Mid-term review passed: on pace.")}</div>`));
+    const fb=$(`<button class="btn sm sec" style="margin-top:8px">Release liaison</button>`);fb.onclick=fireLiaison;sp.appendChild(fb);
+  }else if(G.liaisonCycle&&G.liaisonCycle.phase==="offered"){
+    sp.appendChild($(`<div class="small" style="margin-bottom:8px">The liaison has brought <b class="gold">${G.liaisonCycle.offers.length} pitch${G.liaisonCycle.offers.length>1?"es":""}</b>. Pick one (or decline and keep looking):</div>`));
+    G.liaisonCycle.offers.forEach((o,i)=>{
+      const bi=brandInfo(o.brand),tier=SHOE_TIERS[o.tier];
+      const box=$(`<div style="margin-bottom:8px;padding:10px;border:1px solid var(--honey);border-radius:8px"></div>`);
+      const tg=tier.targets;
+      box.appendChild($(`<div class="small"><b class="gold">${bi.name}</b> \u00B7 ${tier.name} tier \u00B7 ${money(tier.value)}/yr + ${money(tier.value)} signing bonus</div>`));
+      box.appendChild($(`<div class="small muted" style="margin-top:3px">Keep it: ${tg.conrad} Conrad, ${tg.gb} Golden Boots, ${tg.regional} Regional Cups, ${tg.league} league titles over ${SHOE_DEAL_LEN} seasons (any 3 of 4).${o.bump?` <span style="color:var(--loss)">Replaces ${T(o.bump)?T(o.bump).name:"a rival"} at this brand.</span>`:""}</div>`));
+      const ab=$(`<button class="btn sm" style="margin-top:8px">Sign with ${bi.name}</button>`);ab.onclick=()=>acceptShoeOffer(i);box.appendChild(ab);
+      sp.appendChild(box);
+    });
+    const dec=$(`<button class="btn sm sec">Decline all this year</button>`);dec.onclick=declineShoeOffers;sp.appendChild(dec);
+    const fb=$(`<button class="btn sm sec" style="margin-left:6px">Release liaison</button>`);fb.onclick=fireLiaison;sp.appendChild(fb);
+  }else{
+    sp.appendChild($(`<div class="small" style="margin-bottom:8px">The liaison is being evaluated by the brands. A pitch comes at season\u2019s end. Where you stand right now:</div>`));
+    ["gold","silver","bronze"].forEach(tier=>{
+      const q=shoeQualifies(t,tier),open=!!openBrandInTier(tier);
+      const status=q?(open?'<span class="gold">Interested \u2014 slot open</span>':'<span style="color:var(--draw)">Interested \u2014 must out-do a current club</span>'):'<span class="muted">Out of reach</span>';
+      sp.appendChild($(`<div class="small" style="margin-bottom:3px">${SHOE_TIERS[tier].name} (${money(SHOE_TIERS[tier].value)}/yr): ${status}</div>`));
+    });
+    const fb=$(`<button class="btn sm sec" style="margin-top:8px">Release liaison</button>`);fb.onclick=fireLiaison;sp.appendChild(fb);
+  }
+  w.appendChild(sp);}
+
  // scouting department (tiered)
  const scc=$(`<div class="card"></div>`);
  const cc=$(`<div class="card"></div>`);
@@ -3370,9 +3716,10 @@ function viewCup(w){
    const qfNations=[...new Set([wc.champion,...(wc.finalists||[]),...(wc.semifinalists||[])])].slice(0,4);
    if(qfNations.length){
      wcc.appendChild($(`<div class="small muted" style="margin-bottom:4px">Tap a nation to see their 20-man squad:</div>`));
-     const natRow=$(`<div class="row" style="flex-wrap:wrap;gap:4px;margin-bottom:8px"></div>`);
+     const natRow=$(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px"></div>`);
      qfNations.forEach(nat=>{
-       const btn=$(`<button class="btn sm ${nat===wc.champion?'':'sec'}">${nat===wc.champion?'\u2691 ':''} ${nat}</button>`);
+       const isCh=nat===wc.champion;
+       const btn=$(`<button class="btn sm ${isCh?'':'sec'}" style="width:100%">${isCh?'\u2691 ':''}${nat}</button>`);
        btn.onclick=()=>{
          // clear any existing squad panel and build a new one
          const old=wcc.querySelector('.wc-squad');if(old)old.remove();
@@ -3506,7 +3853,7 @@ function viewWorld(w){
      const row=$(`<div class="fixt ${isMe?'me':''}" style="align-items:center;cursor:pointer">
        <div class="muted" style="width:22px;font-size:12px;flex-shrink:0">${i+1}</div>
        <div style="flex:1;min-width:0;padding-left:4px">
-         <div style="font-weight:600">${t.name}${isMe?' <span class="pill">you</span>':''}</div>
+         <div style="font-weight:600">${t.name}${isMe?' <span class="pill">you</span>':''}${shoeMark(t)}</div>
          <div class="small muted">${regionOf(t.region).name} \u00B7 ${tierName(t.region,t.tier)}</div>
          <div style="margin-top:3px;height:4px;border-radius:2px;background:var(--panel2);width:100%;overflow:hidden">
            <div style="height:100%;width:${barW}%;background:${p>=60?'var(--honey)':p>=30?'var(--honey2)':'var(--muted,#555)'};border-radius:2px"></div>
@@ -3528,7 +3875,7 @@ function viewWorld(w){
    const list=$(`<div class="card" style="padding:6px 8px"></div>`);
    standingsOf(WORLD_REGION,tier).forEach(t=>{
      const row=$(`<div class="teampick" style="margin-bottom:4px">
-       <div><b>${t.name}</b>${t.id===G.userTeam?' <span class="pill">you</span>':''}
+       <div><b>${t.name}</b>${t.id===G.userTeam?' <span class="pill">you</span>':''}${shoeMark(t)}
        <div class="small muted">\u2691 ${t.leagueTitles||0} \u00B7 \u2726 ${t.cupTitles||0}${(t.contTitles||0)?' \u00B7 \u2b50 '+t.contTitles:''} \u00B7 ${prestigeLabel(t.prestige||0)} ${Math.round(t.prestige||0)}${isScouted(t.id)?' \u00B7 scouted':''}</div></div>
        <span class="badge-lg">View</span></div>`);
      row.onclick=()=>{WORLD_TEAM=t.id;render()};
@@ -3543,7 +3890,8 @@ function viewWorldTeam(w,id){
  back.onclick=()=>{WORLD_TEAM=null;render()};w.appendChild(back);
  w.appendChild($(`<div class="card"><div class="row"><h2 style="font-size:19px">${t.name}</h2>${tierTag(t)}</div>
    <div class="small muted">${regionOf(t.region).name} \u00B7 ${(t.capacity/1000).toFixed(0)}k seats${t.building>0?` <span style="color:var(--loss)">(expanding \u2014 ${t.building} yr${t.building===1?"":"s"} left)</span>`:""} \u00B7 ${money(t.budget)} budget</div>
-   <div class="small" style="margin-top:4px">Prestige: <b class="gold">${prestigeLabel(t.prestige||0)}</b> (${Math.round(t.prestige||0)}/100) \u00B7 ${prestigeRank(t.id,globalPrestige())} of ${G.teams.length} in the universe</div></div>`));
+   <div class="small" style="margin-top:4px">Prestige: <b class="gold">${prestigeLabel(t.prestige||0)}</b> (${Math.round(t.prestige||0)}/100) \u00B7 ${prestigeRank(t.id,globalPrestige())} of ${G.teams.length} in the universe</div>
+   ${t.sponsor?`<div class="small" style="margin-top:4px">\uD83D\uDC5F Shoe sponsor: <b class="gold">${brandInfo(t.sponsor.brand).name}</b> (${SHOE_TIERS[t.sponsor.tier].name} tier)</div>`:""}</div>`));
  if(!me){
    const tc=$(`<div class="card"></div>`);
    tc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">Club identity</h3>`));
