@@ -92,6 +92,10 @@
   .logline{padding:7px 0;border-bottom:1px solid rgba(56,44,96,.4);font-size:12px;display:flex;gap:8px;justify-content:space-between}
   .stars{color:var(--honey);letter-spacing:1px;font-size:11px}
   .pname{color:var(--honey2);text-decoration:underline;text-decoration-color:rgba(242,201,76,.35);cursor:pointer}
+  .pname.goat{font-weight:800;color:#fff5cf;text-decoration-color:var(--honey)}
+  .goatpill{display:inline-block;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:800;
+    letter-spacing:.06em;background:var(--honey);color:#241a00;margin-right:5px;vertical-align:middle}
+  .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
   .overlay{position:fixed;inset:0;background:rgba(5,9,26,.72);z-index:30;display:flex;align-items:flex-end;justify-content:center}
   @media(min-width:768px){.overlay{align-items:center}}
   .pcard{background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 0 0;padding:18px;width:100%;max-width:440px;max-height:82vh;overflow:auto}
@@ -138,7 +142,7 @@ const money=n=>{const s=n<0?'-':'';n=Math.abs(Math.round(n));
 const REGIONS=[
  {key:"deseret",name:"Deseret",tiers:["Salt Lake","Nauvoo","Kirtland"]},
  {key:"kauai",name:"Kauai",tiers:["Poipu","Napali","Princeville"]},
- {key:"founders",name:"Italian Brainrot",tiers:["Sigma","Rizzler","Chud"]}];
+ {key:"founders",name:"Brainrot",tiers:["Sigma","Rizzler","Chud"]}];
 const PER_TIER=10;                       // 10 clubs per tier, 30 per region
 const TIER_GLYPH=["\u2600","\u263D","\u2726"];
 const TIER_CLS=["tier0","tier1","tier2"];
@@ -163,7 +167,7 @@ const REGION_CLUBS={
   "Crocodilo FC","Sahur Rovers","Bananini City","Assassino United","Frigo Camelo FC",
   "Bombombini Town","Girafa Celeste United","Bri Bri FC","Glorbo Fruttodrillo City","Tigrullini Rovers",
   "Orcalero FC","Trulimero United","Bobrito Bandito Town","Matteo City","Cocofanto FC",
-  "Ambalabu United","Pipi Kiwi Rovers","Tracotocutulo FC","Espresso Signora City","Zibra Zubra United"]};
+  "Ambalabu United","Pipi Kiwi Rovers","Tracotocutulo FC","Bikini Camanini","Zibra Zubra United"]};
 const REGION_EXPANSION={
  deseret:["FC Red Rocks","Handcart Athletic","Grid City","Teancum City","Real Brigham","Desolation United","Jacob City","Railroad Racing","St. George United","SLCFC"],
  kauai:["Hanapepe FC","Eleele United","Kaumakani Town","Puhi FC","Omao Athletic","Kilohana United","Wailua Bay FC"],
@@ -275,6 +279,20 @@ function genCoachPool(){
  pool.forEach(c=>{if(Math.random()<0.4){
    const clubs=G.teams.filter(t=>t.id!==G.userTeam&&(t.prestige||0)>=c.prestigeReq);
    if(clubs.length)c.club=pick(clubs).id;}});
+ ensureCoachTraitCoverage(pool);
+ return pool;
+}
+/* A president must always be able to find at least one of every coach type on the
+   open market, so guarantee a hireable free agent of each trait exists. */
+function ensureCoachTraitCoverage(pool){
+ pool=pool||G.coachPool;if(!pool)return pool;
+ if(G.nextCoachId==null)G.nextCoachId=1000;
+ for(const trait of Object.keys(COACH_TRAITS)){
+   if(pool.some(c=>c.trait===trait&&c.club==null))continue;   // already available
+   const emp=pool.find(c=>c.trait===trait&&c.club!=null);
+   if(emp){emp.club=null;continue;}                            // free up an employed one
+   const c=genCoach(G.nextCoachId++);c.trait=trait;c.club=null;pool.push(c);
+ }
  return pool;
 }
 function coachCompFee(c){return Math.max(50000,Math.round(c.wage*26/10000)*10000);}
@@ -308,6 +326,7 @@ function hireCoach(c){
  if(comp){t.budget-=comp;const club=T(c.club);if(club)club.budget+=comp;
    logAdd(`Compensation paid to ${T(c.club).name} for ${c.name}.`,-comp);}
  G.coachPool=G.coachPool.filter(x=>x.id!==c.id);
+ ensureCoachTraitCoverage(G.coachPool);
  const years=ri(2,3);
  G.coach={id:c.id,name:c.name,age:c.age,tier:c.tier,trait:c.trait,
    wage:c.wage,prestigeReq:c.prestigeReq,contract:years};
@@ -423,6 +442,7 @@ function squadWage(t){return squadOf(t).reduce((s,p)=>s+p.wage,0);}
 function staffWage(){let s=0;for(const r in G.myStaff){const st=G.myStaff[r];if(st)s+=STAFF_WAGE[st.stars]}
  if(G.scoutTier)s+=SCOUT_TIERS[G.scoutTier].wage;
  if(G.superScout)s+=Math.round(SUPER_SCOUT_COST/SEASON_LEN); // £5M/yr over the season's matchdays
+ if(G.ticketManager)s+=TICKET_MGR_WAGE;
  if(G.coach)s+=G.coach.wage;
  return s;}
 function myStars(role){const s=G.myStaff&&G.myStaff[role];return s?s.stars:0;}
@@ -458,7 +478,7 @@ function genWorld(ownerName){
      const t={id:tid++,region:reg.key,name,tier,squad:[],
        budget:Math.round(tier===0?rnd(4e6,8e6):tier===1?rnd(1.5e6,3e6):rnd(.6e6,1.2e6)),
        capacity:Math.round(tier===0?rnd(15000,22000):tier===1?rnd(7000,11000):rnd(3000,5500)),
-       stadiumLevel:0,building:0,leagueTitles:0,cupTitles:0,contTitles:0,
+       stadiumLevel:0,building:0,leagueTitles:0,cupTitles:0,contTitles:0,leagueTitleSeasons:[],
        prestige:Math.round(tier===0?rnd(38,52):tier===1?rnd(20,30):rnd(8,16)),
        trait:assignTrait(tier),st:blankStd()};
      teams.push(t);return t;});
@@ -482,13 +502,13 @@ function genWorld(ownerName){
 
  G={ver:4,owner:ownerName||"President",nextPid:pid,nextTid:tid,expansion,
     scouted:{},refused:{},scoutTier:null,superScout:false,superShort:null,window:null,offers:[],
-    coach:null,coachPool:[],nextCoachId:1000,coachAuto:true,
+    coach:null,coachPool:[],nextCoachId:1000,coachAuto:true,ticketManager:null,
     players,teams,freeAgents,staffPool,myStaff:{},
     userTeam:null,userRegion:null,season:1,matchday:0,
     tierTeams:null,fixtures:makeFixtures(PER_TIER),lastResults:null,
     formation:"4-4-2",xi:null,tactics:{mentality:50,pressing:50,tempo:50,width:50,line:50},
     ticketPrice:20,finance:null,log:[],history:[],cup:null,results:[],
-    cups:{regional:[],continental:[],world:[]},wcYearsLeft:4,_clubIdx:clubIdx};
+    cups:{regional:[],continental:[],world:[],tippy:[]},wcYearsLeft:4,tippyYearsLeft:2,_clubIdx:clubIdx};
  rebuildIndex();rebuildTierTeams();
  G.coachPool=genCoachPool();
 }
@@ -547,9 +567,12 @@ function hydrateLoadedG(){
   (G.expansion||[]).forEach(e=>{if(RN[e.name])e.name=RN[e.name]});
   G.teams.forEach(t=>{if(RN[t.name])t.name=RN[t.name]});}
  if(!G.results)G.results=[];
- if(!G.cups)G.cups={regional:[],continental:[],world:[]};
+ if(!G.cups)G.cups={regional:[],continental:[],world:[],tippy:[]};
+ if(!G.cups.tippy)G.cups.tippy=[];
  if(!G.news)G.news=[];
  if(G.wcYearsLeft==null)G.wcYearsLeft=4;
+ if(G.tippyYearsLeft==null){let ty=(G.wcYearsLeft||4)-2;if(ty<=0)ty+=4;G.tippyYearsLeft=ty;}
+ if(G.ticketManager===undefined)G.ticketManager=null;
  if(!G.refused)G.refused={};
  if(G.myStaff&&G.myStaff.coach){
    if(G.coachTier==null&&G.coach===undefined)G.coachTier=Math.min(3,Math.max(1,Math.round(G.myStaff.coach.stars/2)));
@@ -575,8 +598,12 @@ function hydrateLoadedG(){
  if(G.coachAuto==null)G.coachAuto=true;   // hiring a coach means delegating to him
  G.staffPool=(G.staffPool||[]).filter(s=>!!STAFF_ROLES[s.role]); // drop orphaned roles
  G.teams.forEach(t=>{t.stadiumLevel=t.stadiumLevel||0;t.building=t.building||0;t.pendingSeats=t.pendingSeats||0;t.contTitles=t.contTitles||0;
+   if(!t.leagueTitleSeasons)t.leagueTitleSeasons=[];
    if(t.prestige==null)t.prestige=[45,25,12][t.tier]||12;
    if(!t.trait)t.trait=assignTrait(t.tier);});
+ {const ut=T(G.userTeam);
+  if(ut&&ut.leagueTitleSeasons.length===0&&(ut.leagueTitles||0)>0)
+    ut.leagueTitleSeasons=(G.history||[]).filter(h=>h.tier===0&&h.rank===1).map(h=>h.season);}
  G.players.forEach(p=>{p.gs=p.gs||0;p.gc=p.gc||0;p.as=p.as||0;p.ac=p.ac||0;p.susp=p.susp||0;p.wcWins=p.wcWins||0;p.wcApps=p.wcApps||0;p.gbWins=p.gbWins||0});
  // migrate keepers from the old shared six to dedicated keeper metrics,
  // preserving OVR: seed each new metric near the old rating, then recompute.
@@ -1012,13 +1039,13 @@ function effCapacity(t){
  // during construction the club uses a temporary ground at ~55% capacity
  return (t.building>0)?Math.round(t.capacity*0.55):t.capacity;}
 function universeGoatId(){
- // the single best midfielder alive: OVR first, then career goals, apps, id.
- // Memoized per matchday so attendance/preview calls stay cheap.
+ // the single best attacking player alive (MID or FWD): OVR first, then career
+ // goals, apps, id. Memoized per matchday so attendance/preview calls stay cheap.
  const key=G.season+"-"+G.matchday;
  if(G._goat&&G._goat.key===key)return G._goat.id;
  let best=null;
  for(const p of G.players){
-   if(p.pos!=="MID")continue;
+   if(p.pos!=="MID"&&p.pos!=="FWD")continue;
    if(!best||p.ovr>best.ovr
      ||(p.ovr===best.ovr&&((p.gc||0)>(best.gc||0)
        ||((p.gc||0)===(best.gc||0)&&((p.ac||0)>(best.ac||0)
@@ -1027,6 +1054,7 @@ function universeGoatId(){
  G._goat={key,id:best?best.id:null};
  return G._goat.id;
 }
+function isGoat(id){return id!=null&&id===universeGoatId();}
 function bootRace(){
  // the division's top 5 scorers, the names fans travel to see
  const ureg=userRegionKey(),tier=userTeamObj().tier;
@@ -1039,8 +1067,8 @@ function attendanceFactors(t,oppId,cupStage){
  let demand=clamp(.42+rep*.45-(G.ticketPrice-25)*.012,.10,1);
  const f={base:demand,boot:0,goat:0,prestige:0,form:0,cup:0,stars:[],goatName:null};
  const opp=oppId!=null?T(oppId):null;
- // The GOAT: the single best midfielder in the world is a bigger draw than the
- // Golden Boot race (whose boost caps at +18%). Fans pack in on either side.
+ // The GOAT: the single best attacker (MID or FWD) in the world is a bigger draw
+ // than the Golden Boot race (whose boost caps at +18%). Fans pack in on either side.
  {const gid=universeGoatId();
   if(gid!=null&&((squadOf(t).some(p=>p.id===gid))||(opp&&squadOf(opp).some(p=>p.id===gid)))){
     f.goat=.22;const gp=P(gid);f.goatName=gp?gp.name:null;}}
@@ -1122,6 +1150,7 @@ function merchWeekly(t){
  return Math.round((avg*150+stars*9000)*(1+.1*myStars("commercial")));}
 function financeTick(home,oppId){
  const t=T(G.userTeam);
+ if(home&&G.ticketManager)G.ticketPrice=optimalTicketPrice(t,oppId);
  const att=home?attendance(t,oppId):0;
  const gate=att*G.ticketPrice;
  const spon=sponsorWeekly(t),merch=merchWeekly(t);
@@ -1384,6 +1413,7 @@ function cupUserRecord(md,gf,ga,pens){
    if(g.home&&g.opp!=null){
      const stage=G.cup.phase==="ko"?G.cup.koStage:null;
      const t=userTeamObj();
+     if(G.ticketManager)G.ticketPrice=optimalTicketPrice(t,g.opp,stage==null?0:stage);
      const att=attendance(t,g.opp,stage==null?0:stage);
      const gate=att*G.ticketPrice;
      t.budget+=gate;
@@ -1480,7 +1510,8 @@ function endSeason(){
    }
  });
  // record league + cup titles
- REGIONS.forEach(r=>{RT[r.key][0][0].leagueTitles++;});
+ REGIONS.forEach(r=>{const ch=RT[r.key][0][0];ch.leagueTitles++;
+   (ch.leagueTitleSeasons=ch.leagueTitleSeasons||[]).push(G.season);});
  if(G.cup&&G.cup.winner!==null)T(G.cup.winner).cupTitles++;
  updatePrestige(RT);
  // promotion / relegation within each region (2 up / 2 down; bottom 2 of tier2 -> expansion)
@@ -1501,6 +1532,7 @@ function endSeason(){
      G.teams=G.teams.filter(x=>x.id!==t.id);
      G.expansion.push({id:t.id,region:r.key,name:t.name,inPool:true,
        leagueTitles:t.leagueTitles,cupTitles:t.cupTitles,contTitles:t.contTitles||0,
+       leagueTitleSeasons:t.leagueTitleSeasons||[],
        prestige:Math.round((t.prestige||10)*.8),trait:t.trait});
      t.squad.forEach(pid=>{const p=P(pid);if(p){p.team=null;G.freeAgents.push(pid)}});
    });
@@ -1511,7 +1543,7 @@ function endSeason(){
      // expansion clubs keep their own name (not in REGION_CLUBS), leave _clubIdx unset
      const nt={id:e.id,region:r.key,name:e.name,tier:2,squad:[],
        budget:Math.round(rnd(.6e6,1.2e6)),capacity:Math.round(rnd(3000,5500)),
-       stadiumLevel:0,building:0,leagueTitles:e.leagueTitles||0,cupTitles:e.cupTitles||0,contTitles:e.contTitles||0,
+       stadiumLevel:0,building:0,leagueTitles:e.leagueTitles||0,cupTitles:e.cupTitles||0,contTitles:e.contTitles||0,leagueTitleSeasons:e.leagueTitleSeasons||[],
        prestige:e.prestige||8,trait:e.trait||assignTrait(2),st:blankStd()};
      G.teams.push(nt);
      G.expansion=G.expansion.filter(x=>x.id!==e.id);
@@ -1563,6 +1595,8 @@ function endSeason(){
  recordPrestigeSnapshot();
  G.wcYearsLeft=(G.wcYearsLeft||4)-1;
  if(G.wcYearsLeft<=0){runWorldCup();G.wcYearsLeft=4;}
+ G.tippyYearsLeft=(G.tippyYearsLeft==null?2:G.tippyYearsLeft)-1;
+ if(G.tippyYearsLeft<=0){runTippyCup();G.tippyYearsLeft=4;}
  ageAndRenew();
  coachSeasonTick();
  G.teams.forEach(t=>t.st=blankStd());
@@ -1819,6 +1853,59 @@ function awardXP(p,amt){
  for(const a of order){if(left<=0)break;const add=Math.min(left,1);p[a]=clamp(p[a]+add,18,99);left-=add;}
  setOvr(p);p.value=valueOf(p);p.wage=wageOf(p);
 }
+/* ---- Tippy Cup: four continental teams, contested every 4 seasons, offset two
+   seasons from the World Cup so the two alternate. Players are assigned to an
+   area by the country in their bio; anyone outside these four areas is not
+   eligible. ---- */
+const TIPPY_AREAS=["N. America","S. America","Europe","Africa"];
+const COUNTRY_AREA={
+ USA:"N. America",Canada:"N. America",Mexico:"N. America",
+ Argentina:"S. America",Brazil:"S. America",Uruguay:"S. America",Colombia:"S. America",
+ Ecuador:"S. America",Peru:"S. America",Chile:"S. America",Paraguay:"S. America",
+ France:"Europe",England:"Europe",Spain:"Europe",Portugal:"Europe",Germany:"Europe",
+ Netherlands:"Europe",Italy:"Europe",Belgium:"Europe",Croatia:"Europe",Switzerland:"Europe",
+ Denmark:"Europe",Poland:"Europe",Serbia:"Europe",Sweden:"Europe",Norway:"Europe",
+ Austria:"Europe",Ukraine:"Europe",Turkey:"Europe",Greece:"Europe",Scotland:"Europe",Wales:"Europe",
+ Morocco:"Africa",Senegal:"Africa",Nigeria:"Africa",Ghana:"Africa","Ivory Coast":"Africa",
+ Cameroon:"Africa",Egypt:"Africa",Tunisia:"Africa",Algeria:"Africa"};
+function continentSquad(area){
+ // 20 best players whose country sits in this area; rating from the top XI
+ const squad=G.players.filter(p=>COUNTRY_AREA[p.nat]===area).sort((a,b)=>b.ovr-a.ovr).slice(0,20);
+ if(squad.length<11)return null;
+ const xi=squad.slice(0,11);
+ return{country:area,rating:xi.reduce((s,p)=>s+p.ovr,0)/11,squad};
+}
+function runTippyCup(){
+ let teams=TIPPY_AREAS.map(continentSquad).filter(Boolean).sort((a,b)=>b.rating-a.rating);
+ if(teams.length<2)return;
+ const squads={},gamesPlayed={};
+ teams.forEach(n=>{squads[n.country]=n.squad.map(p=>p.id);n.squad.forEach(p=>gamesPlayed[p.id]=0);
+   n.core=n.squad.slice(0,14).map(p=>p.id);});
+ const log=[];let finalists=[];
+ // seed 1v4, 2v3 when a full field of four is available
+ let alive=teams.length>=4?[teams[0],teams[3],teams[1],teams[2]]:shuffle(teams.slice());
+ const roundName=n=>n===2?"Final":n<=4?"Semifinal":"Round of "+n;
+ while(alive.length>1){
+   const rn=roundName(alive.length);const next=[];
+   if(alive.length===2)finalists=alive.map(n=>n.country);
+   for(let i=0;i<alive.length;i+=2){
+     const A=alive[i],B=alive[i+1];
+     if(!B){next.push(A);continue;}
+     (A.core||[]).forEach(id=>gamesPlayed[id]=(gamesPlayed[id]||0)+1);
+     (B.core||[]).forEach(id=>gamesPlayed[id]=(gamesPlayed[id]||0)+1);
+     const{ga,gb,pens}=simNations(A,B);
+     next.push(ga>=gb?A:B);
+     log.unshift({round:rn,line:`${A.country} ${ga}\u2013${gb} ${B.country}${pens?" (pens)":""}`});
+   }
+   alive=next;
+ }
+ const champ=alive[0].country;
+ Object.keys(gamesPlayed).forEach(id=>{const p=P(+id);if(!p)return;const g=gamesPlayed[id];if(g>0)awardXP(p,g);});
+ if(!G.cups.tippy)G.cups.tippy=[];
+ const rec={season:G.season,champion:champ,finalists,squads,gamesPlayed,log:log.slice(0,8)};
+ G.cups.tippy.push(rec);G.lastTippy=rec;
+ logAdd(`\u2728 Tippy Cup won by ${champ}!${finalists.length?` (Final: ${finalists.join(" v ")})`:""}`);
+}
 function runWorldCup(){
  let nations=COUNTRIES.map(natStrength).filter(Boolean)
    .sort((a,b)=>b.rating-a.rating);
@@ -1993,6 +2080,7 @@ function coachSeasonTick(){
  // replenish so there are always candidates worth arguing over
  if(G.nextCoachId==null)G.nextCoachId=1000;
  while(G.coachPool.length<12)G.coachPool.push(genCoach(G.nextCoachId++));
+ ensureCoachTraitCoverage(G.coachPool);
 }
 
 /* ======================= USER XI ======================= */
@@ -2108,6 +2196,21 @@ function genOffers(){
 }
 function p_tierPref(p){return p.ovr>=80?0:p.ovr>=68?1:2;}
 const SUPER_SCOUT_COST=5000000;
+const TICKET_MGR_WAGE=15000;   // weekly cost of the automated ticket-pricing manager
+/* Scans every price and returns the one that maximises gate revenue for a given
+   fixture (attendance falls as the price rises, so there is a revenue-maximising
+   point). Restores G.ticketPrice before returning. */
+function optimalTicketPrice(t,oppId,cupStage){
+ const save=G.ticketPrice;let best=save,bestRev=-1;
+ for(let p=5;p<=60;p++){G.ticketPrice=p;const rev=attendance(t,oppId,cupStage)*p;
+   if(rev>bestRev){bestRev=rev;best=p;}}
+ G.ticketPrice=save;return best;
+}
+function applyTicketManager(oppId,cupStage){
+ if(!G.ticketManager)return;
+ const t=userTeamObj();if(!t)return;
+ G.ticketPrice=optimalTicketPrice(t,oppId,cupStage);
+}
 function buildSuperShortlist(){
  // proactive scout scours all regions for value: young, high-ceiling, affordable-ish
  const t=userTeamObj();if(!t)return;
@@ -2163,8 +2266,9 @@ function showPlayer(id){
  const bars=attrsFor(p.pos).map(a=>`<div class="arow"><span class="al">${a}</span><span class="abar"><div style="width:${p[a]}%"></div></span><span class="av">${p[a]}</span></div>`).join("");
  const ov=$(`<div class="overlay"></div>`);
  ov.appendChild($(`<div class="pcard">
-   <div class="row"><div><h3 style="font-size:17px">${p.name}${p.age>=40?'<span class="ret">R</span>':''}</h3>
+   <div class="row"><div><h3 style="font-size:17px">${p.name}${p.age>=40?'<span class="ret">R</span>':''}${isGoat(p.id)?' <span class="goatpill">GOAT</span>':''}</h3>
      <div class="small muted">${club} \u00B7 <span class="pos ${p.pos}">${p.pos}</span> \u00B7 ${p.age}y \u00B7 ${p.nat||"?"}</div>
+     ${isGoat(p.id)?'<div class="small gold" style="margin-top:2px;font-weight:700">\u2605 The GOAT \u2014 best player in the world</div>':''}
      ${(()=>{
        const badges=[];
        if(p.gbWins>0)badges.push(`\u26BD GB Winner \u00D7${p.gbWins}`);
@@ -2302,12 +2406,34 @@ function trophyCard(t){
  const c=$(`<div class="card"></div>`);
  c.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Trophy cabinet</h3>`));
  const cupName=(REGION_CUP[t.region]||"Regional Cup").replace("The ","");
- c.appendChild($(`<div class="row">
-   <div class="stat"><div class="lbl">League titles</div><div class="big">${t.leagueTitles||0}</div></div>
-   <div class="stat"><div class="lbl">${cupName}</div><div class="big">${t.cupTitles||0}</div></div>
-   <div class="stat"><div class="lbl">${CONT_CUP.replace("The ","")}</div><div class="big">${t.contTitles||0}</div></div></div>`));
+ const contName=CONT_CUP.replace("The ","");
+ const leagueSeasons=(t.leagueTitleSeasons&&t.leagueTitleSeasons.length)
+   ?t.leagueTitleSeasons.slice()
+   :(t.id===G.userTeam?(G.history||[]).filter(h=>h.tier===0&&h.rank===1).map(h=>h.season):[]);
+ const cupSeasons=((G.cups&&G.cups.regional)||[]).filter(e=>e.winner===t.name&&e.region===t.region).map(e=>e.season);
+ const contSeasons=((G.cups&&G.cups.continental)||[]).filter(e=>e.winner===t.name&&e.region===t.region).map(e=>e.season);
+ const row=$(`<div class="row"></div>`);
+ const detail=$(`<div class="small center" style="margin-top:8px;display:none"></div>`);
+ function mkStat(lbl,count,seasons){
+   const s=$(`<div class="stat" style="cursor:pointer"><div class="lbl">${lbl}</div><div class="big">${count||0}</div></div>`);
+   s.onclick=()=>{
+     detail.style.display="block";
+     if(!count){detail.innerHTML=`<span class="muted">No ${lbl} won yet.</span>`;return;}
+     const uniq=[...new Set(seasons)].sort((a,b)=>a-b);
+     detail.innerHTML=uniq.length
+       ?`<b class="gold">${lbl}</b> \u00B7 won in ${uniq.map(n=>"Season "+n).join(", ")}`
+       :`<b class="gold">${lbl}</b> \u00B7 ${count} won \u2014 season records unavailable for this club.`;
+   };
+   return s;
+ }
+ row.appendChild(mkStat("League titles",t.leagueTitles,leagueSeasons));
+ row.appendChild(mkStat(cupName,t.cupTitles,cupSeasons));
+ row.appendChild(mkStat(contName,t.contTitles,contSeasons));
+ c.appendChild(row);c.appendChild(detail);
  if(!(t.leagueTitles||t.cupTitles||t.contTitles))
    c.appendChild($(`<div class="small muted center" style="margin-top:6px">No silverware yet. Win a division, the cup, or the ${CONT_CUP} to fill the cabinet.</div>`));
+ else
+   c.appendChild($(`<div class="small muted center" style="margin-top:6px">Tap a trophy to see the winning seasons.</div>`));
  return c;
 }
 function clubLegendsCard(t,title){
@@ -2429,6 +2555,7 @@ function viewClub(w){
      toast(m);
      if(G.lastCont)setTimeout(()=>toast(`${CONT_CUP}: ${G.lastCont.winner} champions${G.lastCont.qualified?" \u00B7 you qualified":""}.`),600);
      if(G.lastWC&&G.lastWC.season===G.season-1)setTimeout(()=>toast(`\u2691 World Cup won by ${G.lastWC.champion}!`),1200);
+     if(G.lastTippy&&G.lastTippy.season===G.season-1)setTimeout(()=>toast(`\u2728 Tippy Cup won by ${G.lastTippy.champion}!`),1400);
      render()};
    const roundFeedback=()=>{const lr=G.contLive&&G.contLive.lastRound;
      const mine=lr&&lr.lines.find(l=>l.user);if(!mine)return;
@@ -2613,7 +2740,7 @@ function viewSquad(w){
  const sc=$(`<div class="card"></div>`);
  sc.appendChild($(`<h3 style="font-size:15px;margin-bottom:8px">Full squad (${userTeamObj().squad.length})</h3>`));
  const rows=squadOf(userTeamObj()).sort((a,b)=>b.ovr-a.ovr).map(p=>
-   `<tr><td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td><td class="l"><span class="pos ${p.pos}">${p.pos}</span></td>`+
+   `<tr><td class="l">${isGoat(p.id)?'<span class="goatpill">GOAT</span>':''}<span class="pname${isGoat(p.id)?' goat':''}" data-p="${p.id}">${p.name}</span></td><td class="l"><span class="pos ${p.pos}">${p.pos}</span></td>`+
    `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td>${p.gs||0}</td>`+
    `<td>${p.inj>0?`<span class="injtag">INJ ${p.inj}</span>`:p.susp>0?`<span class="injtag">SUSP</span>`:"\u2713"}</td>`+
    `<td><button class="btn sm sec" data-rel="${p.id}">Release</button></td></tr>`).join("");
@@ -2768,18 +2895,22 @@ function viewTransfers(w){
    const shc=$(`<div class="card" style="border-color:var(--honey)"></div>`);
    shc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">\u2605 Chief Scout shortlist</h3>
      <div class="small muted" style="margin-bottom:6px">Best young talent across all regions. Their clubs are already revealed \u2014 buy them from the World tab during the window.</div>`));
+   const _bud=userTeamObj().budget;
    const rows=G.superShort.map(pid=>{const p=P(pid);if(!p||p.team===null)return"";
      const club=T(p.team);
      const refusedTag=G.refused&&G.refused[p.id];
-     return `<tr><td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td>`+
+     const fee=transferFee(p);
+     const canAfford=_bud>=fee;
+     return `<tr><td class="l">${isGoat(p.id)?'<span class="goatpill">GOAT</span>':''}<span class="pname${isGoat(p.id)?' goat':''}" data-p="${p.id}">${p.name}</span></td>`+
        `<td><span class="pos ${p.pos}">${p.pos}</span></td><td>${p.age}</td>`+
        `<td class="gold">${p.ovr}</td><td class="muted">${p.pot}</td>`+
        `<td class="l small muted">${club?club.name:"?"}</td>`+
-       `<td>${money(transferFee(p))}</td>`+
-       `<td>${refusedTag?'<span class="small muted">Refused</span>':`<button class="btn sm" data-offer="${p.id}">Offer</button>`}</td></tr>`;}).join("");
+       `<td>${money(fee)}</td>`+
+       `<td>${refusedTag?'<span class="small muted">Refused</span>':canAfford?`<button class="btn sm" data-offer="${p.id}">Offer</button>`:'<span class="small muted">Can\u2019t afford</span>'}</td></tr>`;}).join("");
    const st=$(`<table><thead><tr><th class="l">Player</th><th></th><th>Age</th><th>OVR</th><th>POT</th><th class="l">Club</th><th>Fee</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
    st.querySelectorAll("[data-offer]").forEach(b=>b.onclick=e=>{e.stopPropagation();buyPlayer(P(+b.dataset.offer))});
-   wireNames(st);shc.appendChild(st);
+   wireNames(st);
+   const stWrap=$(`<div class="tscroll"></div>`);stWrap.appendChild(st);shc.appendChild(stWrap);
    w.appendChild(shc);
  }
 
@@ -2827,7 +2958,7 @@ function viewTransfers(w){
      :(t.budget>=fee&&t.squad.length<30);
    const btnLabel=isScouted?(refused?'Refused':open?'Offer':'Closed'):'Sign';
    const potCell=hasScout||isScouted?p.pot:"?";
-   return `<tr><td class="l"><span class="pname" data-p="${p.id}">${p.name}</span></td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
+   return `<tr><td class="l">${isGoat(p.id)?'<span class="goatpill">GOAT</span>':''}<span class="pname${isGoat(p.id)?' goat':''}" data-p="${p.id}">${p.name}</span></td><td><span class="pos ${p.pos}">${p.pos}</span></td>`+
    `<td>${ageCell(p)}</td><td class="gold">${p.ovr}</td><td class="muted">${potCell}</td>`+
    `<td>${money(fee)}</td>`+
    `<td>${refused?'<span class="small muted">Refused</span>'
@@ -2837,7 +2968,8 @@ function viewTransfers(w){
  ftab.querySelectorAll("[data-sign]").forEach(b=>b.onclick=e=>{e.stopPropagation();
    MKT_TAB==='scouted'?buyPlayer(P(+b.dataset.sign)):signPlayer(P(+b.dataset.sign))});
  wireNames(ftab);
- mc.appendChild(ftab);w.appendChild(mc);
+ const ftabWrap=$(`<div class="tscroll"></div>`);ftabWrap.appendChild(ftab);
+ mc.appendChild(ftabWrap);w.appendChild(mc);
 
  // pointer to World tab for club-to-club deals
  w.appendChild($(`<div class="card small muted center">To buy from another club, open the <b>World</b> tab, tap a club, scout it, then make an offer during the window.</div>`));
@@ -2882,14 +3014,33 @@ function viewOffice(w){
      <div class="logline" style="font-weight:800"><span>Net last matchday</span>
        <span class="${f.net>=0?'amt-p':'amt-n'}">${f.net>=0?'+':''}${money(f.net)}</span></div></div>`));
  }else fc.appendChild($(`<div class="small muted">Play a matchday to see the weekly ledger.</div>`));
- fc.appendChild($(`<div class="slider-row">
-   <div class="ends"><span>Ticket \u00A35</span><span>\u00A360</span></div></div>`));
- const tp=$(`<input type="range" min="5" max="60" value="${G.ticketPrice}">`);
- const tpl=$(`<div class="small center">Ticket price: <b class="gold">\u00A3${G.ticketPrice}</b> \u00B7 est. attendance ${attendance(t).toLocaleString()}/${effCapacity(t).toLocaleString()}</div>`);
- tp.oninput=()=>{G.ticketPrice=+tp.value;
-   tpl.innerHTML=`Ticket price: <b class="gold">\u00A3${G.ticketPrice}</b> \u00B7 est. attendance ${attendance(t).toLocaleString()}/${effCapacity(t).toLocaleString()}`};
- fc.querySelector(".slider-row").appendChild(tp);
- fc.appendChild(tpl);
+ if(G.ticketManager){
+   const nx=nextHomeFixture();
+   if(nx)G.ticketPrice=optimalTicketPrice(t,nx.opp,nx.cupStage);
+   const mgr=$(`<div style="margin-top:8px;padding:10px;border:1px solid var(--honey);border-radius:8px"></div>`);
+   mgr.appendChild($(`<div class="small"><b class="gold">${G.ticketManager.name}</b> is managing ticket prices \u00B7 ${money(TICKET_MGR_WAGE)}/wk</div>`));
+   mgr.appendChild($(`<div class="small muted" style="margin-top:3px">He sets the revenue-maximising price for every home fixture automatically.${nx?` Next home fixture priced at <b class="gold">\u00A3${G.ticketPrice}</b> \u00B7 est. attendance ${attendance(t,nx.opp,nx.cupStage).toLocaleString()}/${effCapacity(t).toLocaleString()}.`:""}</div>`));
+   const dis=$(`<button class="btn sm sec" style="margin-top:8px">Dismiss ${G.ticketManager.name}</button>`);
+   dis.onclick=()=>{G.ticketManager=null;logAdd("Released the ticket manager \u2014 you set prices again.");saveGame(true);render();};
+   mgr.appendChild(dis);
+   fc.appendChild(mgr);
+ }else{
+   fc.appendChild($(`<div class="slider-row">
+     <div class="ends"><span>Ticket \u00A35</span><span>\u00A360</span></div></div>`));
+   const tp=$(`<input type="range" min="5" max="60" value="${G.ticketPrice}">`);
+   const tpl=$(`<div class="small center">Ticket price: <b class="gold">\u00A3${G.ticketPrice}</b> \u00B7 est. attendance ${attendance(t).toLocaleString()}/${effCapacity(t).toLocaleString()}</div>`);
+   tp.oninput=()=>{G.ticketPrice=+tp.value;
+     tpl.innerHTML=`Ticket price: <b class="gold">\u00A3${G.ticketPrice}</b> \u00B7 est. attendance ${attendance(t).toLocaleString()}/${effCapacity(t).toLocaleString()}`};
+   fc.querySelector(".slider-row").appendChild(tp);
+   fc.appendChild(tpl);
+   const hireBox=$(`<div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:8px"></div>`);
+   hireBox.appendChild($(`<div class="small muted">Hire a ticket manager (${money(TICKET_MGR_WAGE)}/wk) to set the revenue-maximising price for every home fixture automatically \u2014 no more setting it by hand.</div>`));
+   const hire=$(`<button class="btn sm" style="margin-top:8px">Hire ticket manager \u00B7 ${money(TICKET_MGR_WAGE)}/wk</button>`);
+   hire.onclick=()=>{G.ticketManager={name:pick(NAMES.deseret.first)+" "+pick(NAMES.deseret.last)};
+     logAdd(`Hired ${G.ticketManager.name} to manage ticket pricing.`);saveGame(true);render();};
+   hireBox.appendChild(hire);
+   fc.appendChild(hireBox);
+ }
  w.appendChild(fc);
 
  // ---- box office: what the next home fixture is worth ----
@@ -3159,7 +3310,7 @@ function viewCup(w){
 
  // ---- World Cup ----
  const wcc=$(`<div class="card"></div>`);
- wcc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">\u2691 ${WORLD_CUP}</h3>
+ wcc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">\u2691 ${WORLD_CUP.replace("The ","")}</h3>
    <div class="small muted" style="margin-bottom:6px">Every 4 seasons the 32 strongest nations (top 20 players each) contest a knockout. Next in ${G.wcYearsLeft||4} season${(G.wcYearsLeft||4)===1?'':'s'}.</div>`));
  if(G.lastWC){
    const wc=G.lastWC;
@@ -3201,12 +3352,50 @@ function viewCup(w){
  }else wcc.appendChild($(`<div class="small muted">Not yet contested.</div>`));
  w.appendChild(wcc);
 
- // ---- Full honours history: one competition at a time ----
- const anyHist=(G.cups.regional.length||G.cups.continental.length||G.cups.world.length);
+ // ---- Tippy Cup ----
+ const tpc=$(`<div class="card"></div>`);
+ tpc.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">\u2728 Tippy Cup</h3>
+   <div class="small muted" style="margin-bottom:6px">Contested every 4 seasons, two seasons after each World Cup, between four continental teams \u2014 N. America, S. America, Europe and Africa \u2014 each built from its 20 best players by nationality. Next in ${G.tippyYearsLeft||4} season${(G.tippyYearsLeft||4)===1?'':'s'}.</div>`));
+ if(G.lastTippy){
+   const tc=G.lastTippy;
+   tpc.appendChild($(`<div class="small" style="margin-bottom:4px">Reigning champion (Season ${tc.season}): <b class="gold">${tc.champion}</b></div>`));
+   tpc.appendChild($(`<div class="small muted" style="margin-bottom:4px">Tap an area to see their 20-man squad:</div>`));
+   const areaRow=$(`<div class="row" style="flex-wrap:wrap;gap:4px;margin-bottom:8px"></div>`);
+   Object.keys(tc.squads||{}).forEach(area=>{
+     const btn=$(`<button class="btn sm ${area===tc.champion?'':'sec'}">${area===tc.champion?'\u2728 ':''}${area}</button>`);
+     btn.onclick=()=>{
+       const old=tpc.querySelector('.tp-squad');if(old)old.remove();
+       const sq=$(`<div class="tp-squad card" style="margin-top:8px;padding:8px 10px"></div>`);
+       const ids=(tc.squads&&tc.squads[area])||[];
+       const players=ids.map(id=>P(id)).filter(Boolean).sort((a,b)=>b.ovr-a.ovr);
+       sq.appendChild($(`<div class="small gold" style="margin-bottom:6px">${area===tc.champion?'\u2728 Tippy Cup champions: ':''}${area} \u00B7 ${players.length} players</div>`));
+       const rows=players.map((p,i)=>{
+         const games=tc.gamesPlayed&&tc.gamesPlayed[p.id]||0;
+         const club=p.team!=null&&T(p.team)?T(p.team).name:'Free agent';
+         return `<tr><td class="l muted">${i+1}</td>`+
+           `<td class="l">${isGoat(p.id)?'<span class="goatpill">GOAT</span>':''}<span class="pname${isGoat(p.id)?' goat':''}" data-p="${p.id}">${p.name}</span></td>`+
+           `<td><span class="pos ${p.pos}">${p.pos}</span></td>`+
+           `<td class="gold">${p.ovr}</td>`+
+           `<td class="l small muted">${club}</td>`+
+           `<td class="muted small">${games>0?games+'g':'-'}</td></tr>`;
+       }).join('');
+       const tbl=$(`<table><thead><tr><th class="l">#</th><th class="l">Player</th><th></th><th>OVR</th><th class="l">Club</th><th>Games</th></tr></thead><tbody>${rows}</tbody></table>`);
+       wireNames(tbl);
+       const wrap=$(`<div class="tscroll"></div>`);wrap.appendChild(tbl);sq.appendChild(wrap);
+       tpc.appendChild(sq);
+     };
+     areaRow.appendChild(btn);
+   });
+   tpc.appendChild(areaRow);
+   tc.log.slice(0,6).forEach(e=>tpc.appendChild($(`<div class="logline"><span class="muted">${e.round}</span><span>${e.line}</span></div>`)));
+ }else tpc.appendChild($(`<div class="small muted">Not yet contested.</div>`));
+ w.appendChild(tpc);
+ const anyHist=(G.cups.regional.length||G.cups.continental.length||G.cups.world.length||(G.cups.tippy||[]).length);
  if(anyHist){
    const hc=$(`<div class="card"></div>`);
    hc.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Cup history</h3>`));
-   const tabs=[["world",WORLD_CUP,G.cups.world.length],
+   const tabs=[["world",WORLD_CUP.replace("The ",""),G.cups.world.length],
+               ["tippy","Tippy",(G.cups.tippy||[]).length],
                ["continental",CONT_CUP.replace("The ",""),G.cups.continental.length],
                ["regional","Regional",G.cups.regional.length]].filter(t=>t[2]>0);
    if(!tabs.find(t=>t[0]===CUPHIST_TAB))CUPHIST_TAB=tabs[0][0];
@@ -3219,6 +3408,8 @@ function viewCup(w){
    hc.appendChild(row);
    if(CUPHIST_TAB==="world"){
      G.cups.world.slice().reverse().forEach(e=>hc.appendChild($(`<div class="logline"><span class="muted">Season ${e.season}</span><span class="gold">${e.champion}</span></div>`)));
+   }else if(CUPHIST_TAB==="tippy"){
+     (G.cups.tippy||[]).slice().reverse().forEach(e=>hc.appendChild($(`<div class="logline"><span class="muted">Season ${e.season}</span><span class="gold">${e.champion}</span></div>`)));
    }else if(CUPHIST_TAB==="continental"){
      G.cups.continental.slice().reverse().forEach(e=>hc.appendChild($(`<div class="logline"><span class="muted">Season ${e.season}</span><span class="gold">${e.winner}</span></div>`)));
    }else{
