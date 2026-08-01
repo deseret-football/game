@@ -1532,6 +1532,7 @@ function fiveYearBomb(){
    G.news.unshift({season:G.season,text:`${d.victim.name} left ${d.team.name} indefinitely due to ${d.reason}. A 16-year-old was called up.`});
  });
  if(dep.length>1)logAdd(`Around the league: ${dep.length-1} other club${dep.length-1===1?"":"s"} lost a first-team player to off-field matters.`);
+ rebuildIndex();   // register the new 16-year-olds in the id->player map, or P() returns undefined and match prep spins forever
 }
 function aiStadiumTick(){
  G.teams.forEach(t=>{
@@ -1778,7 +1779,7 @@ function maybeEvent(){
    logAdd("A Times report highlighted your club for encouraging good mental health. Goodwill (and money) followed.",a);});
  const ev=pick(deck);ev();
  const last=G.log[0];
- toast(last.text+(last.amt?` (${last.amt>0?'+':''}${money(last.amt)})`:''));
+ if(last)toast(last.text+(last.amt?` (${last.amt>0?'+':''}${money(last.amt)})`:''));
 }
 
 /* ---- AI transfer churn ---- */
