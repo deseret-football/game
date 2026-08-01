@@ -332,6 +332,7 @@ function hireCoach(c){
  G.coach={id:c.id,name:c.name,age:c.age,tier:c.tier,trait:c.trait,
    wage:c.wage,prestigeReq:c.prestigeReq,contract:years};
  logAdd(`${c.name} appointed head coach on a ${years}-year deal at ${money(c.wage)}/wk.`);
+ awardBadge("first_coach");
  toast(`${c.name} takes charge.`);
  if(G.coachAuto)coachRunSetup();   // he picks his first side immediately
  saveGame(true);render();
@@ -342,6 +343,8 @@ function sackCoach(){
  if(t.budget<sev)return toast(`Paying up his contract costs ${money(sev)}. You cannot afford to sack him.`);
  if(!confirm(`Sack ${G.coach.name}? Paying up his contract costs ${money(sev)}.`))return;
  t.budget-=sev;
+ {const bs=G.badgeStats||(G.badgeStats={});bs.sacked=bs.sacked||{};bs.sacked[G.coach.id]=1;
+  if(Object.keys(bs.sacked).length>=5)awardBadge("serial_sackings");}
  logAdd(`${G.coach.name} sacked. Contract paid up.`,sev?-sev:0);
  releaseCoachToPool(G.coach);G.coach=null;delete G.coachRenewal;
  saveGame(true);render();
@@ -359,6 +362,7 @@ function coachRenewalDemand(){
 }
 function renewCoach(){
  const r=G.coachRenewal;if(!r||!G.coach)return;
+ if(r.wage>=Math.round(G.coach.wage*1.3))awardBadge("contract_whisperer");
  G.coach.wage=r.wage;G.coach.contract=r.years;
  logAdd(`${G.coach.name} signed a new ${r.years}-year deal at ${money(r.wage)}/wk.`);
  delete G.coachRenewal;
@@ -410,7 +414,8 @@ const TILT_BIAS={};
 for(const _pos in OVR_W){let _b=0;
  for(const _k in OVR_W[_pos])_b+=(TILT[_pos][_k]||0)*OVR_W[_pos][_k];
  TILT_BIAS[_pos]=_b;}
-function setOvr(p){p.ovr=Math.min(calcOvr(p),p.pot);return p.ovr;}
+function effPot(p){return p.bust?(p.bustCeil||60):p.pot;}   // hidden true ceiling for busts
+function setOvr(p){p.ovr=Math.min(calcOvr(p),effPot(p));return p.ovr;}
 const ATTRS=OUTFIELD_ATTRS;   // alias kept for outfield-only call sites
 
 function ovrFromAge(pot,age){
@@ -455,6 +460,10 @@ function newPlayer(id,pos,age,regionKey){
  const p={id,name:pick(nm.first)+" "+pick(nm.last),pos,age,region:rk,nat:pick(COUNTRIES),
    pot:56+Math.floor(Math.pow(Math.random(),1.6)*43),team:null,inj:0,
    gs:0,gc:0,as:0,ac:0,susp:0,wcWins:0,wcApps:0,tippyWins:0,tippyApps:0,gbWins:0};
+ // ~5% of the very brightest 16-year-old prospects (POT 90+) are secretly busts: a
+ // real ceiling far below their potential, hidden from everyone including scouts, so
+ // they look world-beating on paper but quietly stall and never make it.
+ if(p.age<=16&&p.pot>=90&&Math.random()<0.05){p.bust=true;p.bustCeil=ri(52,66);}
  makeAttrs(p);p.value=valueOf(p);p.wage=wageOf(p);return p;}
 
 function newStaff(id,role){
@@ -513,7 +522,7 @@ function genWorld(ownerName){
     formation:"4-4-2",xi:null,tactics:{mentality:50,pressing:50,tempo:50,width:50,line:50},
     ticketPrice:20,finance:null,log:[],history:[],cup:null,results:[],
     cups:{regional:[],continental:[],world:[],tippy:[]},wcYearsLeft:4,tippyYearsLeft:2,
-    liaison:false,liaisonCycle:null,gbLog:[],_clubIdx:clubIdx};
+    liaison:false,liaisonCycle:null,gbLog:[],badges:{},badgeStats:{},_clubIdx:clubIdx};
  rebuildIndex();rebuildTierTeams();
  G.coachPool=genCoachPool();
 }
@@ -577,6 +586,8 @@ function hydrateLoadedG(){
  if(G.liaison===undefined)G.liaison=false;
  if(G.liaisonCycle===undefined)G.liaisonCycle=null;
  if(!G.gbLog)G.gbLog=[];
+ if(!G.badges)G.badges={};
+ if(!G.badgeStats)G.badgeStats={};
  if(!G.news)G.news=[];
  if(G.wcYearsLeft==null)G.wcYearsLeft=4;
  if(G.tippyYearsLeft==null){let ty=(G.wcYearsLeft||4)-2;if(ty<=0)ty+=4;G.tippyYearsLeft=ty;}
@@ -630,7 +641,7 @@ function hydrateLoadedG(){
  // seed frozen club scorer records so departed legends persist (Update 4)
  G.teams.forEach(t=>{if(!t.scorers){t.scorers={};
    squadOf(t).forEach(p=>{if(p&&(p.gc||0)>0)t.scorers[p.id]={name:p.name,pos:p.pos,goals:p.gc};});}});
- if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};if(typeof genOffers==="function")genOffers();}
+ if(G.matchday===0&&(!G.window||G.window.day>3)){G.window={day:1,offersMade:0};G.badgeStats=G.badgeStats||{};G.badgeStats.windowSigns=0;if(typeof genOffers==="function")genOffers();}
  if(!G.window)G.window={day:4,offersMade:0};
  if(!G.offers)G.offers=[];
  if(G.userTeam!==null&&!G.teams.find(t=>t.id===G.userTeam)){
@@ -1013,6 +1024,7 @@ function playMatchday(){
  // Runs now that injuries have healed and before the fixture is read, so a
  // Tactician still prepares for this exact opponent.
  if(G.coachAuto&&coachTier()>0)coachRunSetup();
+ if(G.matchday===0){G.badgeStats=G.badgeStats||{};G.badgeStats.seasonStartBudget=userTeamObj().budget;}
  const fx=G.fixtures[G.matchday],out=[];
  let userHome=null,userOpp=null;
  REGIONS.forEach(reg=>{
@@ -1025,12 +1037,20 @@ function playMatchday(){
        applyResult(h,a,hg,ag);
        if(h===G.userTeam||a===G.userTeam){const home=h===G.userTeam;
          G.results.push({md:G.matchday,opp:home?a:h,home,gf:home?hg:ag,ga:home?ag:hg});
-         G.lastScorers={mine:home?hs:asc,theirs:home?asc:hs};}
+         G.lastScorers={mine:home?hs:asc,theirs:home?asc:hs};
+         const _gf=home?hg:ag,_ga=home?ag:hg;
+         if(!home&&_gf>_ga&&jetActive(userTeamObj())){G.badgeStats=G.badgeStats||{};G.badgeStats.awayJetWins=(G.badgeStats.awayJetWins||0)+1;}}
        out.push({region:reg.key,tier,h,a,hg,ag});
      });
    }
  });
  G.lastResults=out;G.matchday++;
+ awardBadge("first_whistle");
+ if(G.lastScorers&&G.lastScorers.mine&&G.lastScorers.mine.length){
+   awardBadge("first_goal");
+   const cc={};G.lastScorers.mine.forEach(n=>cc[n]=(cc[n]||0)+1);
+   if(Object.values(cc).some(c=>c>=3))awardBadge("hat_trick");
+ }
  // a player who sat out this match has now served the ban
  G.players.forEach(p=>{if(p.susp>0)p.susp--});
  financeTick(userHome===true,userOpp);
@@ -1039,6 +1059,7 @@ function playMatchday(){
  maybeEvent();
  aiTransfers();
  if(ALL_CUP_MARKS.includes(G.matchday))playCupRound();
+ checkBadges();
  saveGame(true);
 }
 
@@ -1184,8 +1205,9 @@ function aiFacilitiesTick(){
    Six brands (two per tier), three club slots each = 18 deals shared between the
    user and AI. Deals run 10 seasons, pay a yearly value plus a one-year signing
    bonus, and carry four cumulative targets; hit 3 of 4 to keep the brand happy.
-   A soft mid-term review at season 5 drops the PAYMENT a tier if badly off pace
-   (money already paid is always kept). The user explores via a hired liaison. */
+   Funding is secure for the whole term (no mid-term cut). At Year 10 a club that hit
+   the targets keeps the brand: AI auto-renews, the user is offered a renewal or rival
+   pitches (no fresh evaluation season). The user explores via a hired liaison. */
 const SHOE_TIERS={
  gold:  {name:"Gold",  value:10000000, prestige:65, targets:{conrad:3,gb:3,regional:5,league:5},
          brands:[{key:"atreides",name:"Atreides"},{key:"arrakis",name:"Arrakis"}]},
@@ -1226,32 +1248,34 @@ function dealTargetsMet(t){if(!t.sponsor)return 0;const tg=SHOE_TIERS[t.sponsor.
  return SHOE_KEYS.filter(k=>pr[k]>=tg[k]).length;}
 function signDeal(t,brandKey,startSeason){
  const bi=brandInfo(brandKey);if(!bi)return;
- t.sponsor={brand:brandKey,tier:bi.tier,payTier:bi.tier,start:startSeason,mid:false};
+ t.sponsor={brand:brandKey,tier:bi.tier,start:startSeason};
  const bonus=SHOE_TIERS[bi.tier].value;t.budget+=bonus;
  if(t.id===G.userTeam)logAdd(`Signed a ${SHOE_TIERS[bi.tier].name}-tier shoe deal with ${bi.name}! Signing bonus ${money(bonus)}.`,bonus);}
 function endDeal(t){t.sponsor=null;}
-/* Runs each season end (before the season counter ticks): pays every deal, runs the
-   mid-term and final reviews, expires 10-year deals, then lets AI fill open slots and
-   advances the user's liaison cycle. */
+/* Runs each season end (before the season counter ticks): pays every active deal at
+   its full tier value (no mid-term review \u2014 funding is secure for the whole term).
+   At year 10, a club that hit 3 of 4 targets keeps the brand: AI auto-renews, the user
+   is offered a renewal or rival pitches. Miss the targets and the deal simply ends. */
 function sponsorTick(){
  G.teams.forEach(t=>{
    if(!t.sponsor)return;
    const d=t.sponsor,played=(G.season-d.start+1);
-   if(played<1)return;                       // signed for next season, not yet active
-   t.budget+=SHOE_TIERS[d.payTier].value;     // annual payment (payTier may be downgraded)
-   if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} shoe deal: annual payment.`,SHOE_TIERS[d.payTier].value);
-   if(played===5&&!d.mid){                    // soft mid-term review
-     d.mid=true;const tg=SHOE_TIERS[d.tier].targets,pr=dealProgress(t);
-     const onPace=SHOE_KEYS.filter(k=>pr[k]>=Math.ceil(tg[k]/2)).length>=3;
-     if(!onPace){const lower=SHOE_TIER_ORDER[Math.max(0,SHOE_TIER_ORDER.indexOf(d.tier)-1)];
-       if(lower!==d.payTier){d.payTier=lower;
-         if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} mid-term review: off pace \u2014 payments cut to ${SHOE_TIERS[lower].name} rate for the rest of the deal.`);}}
-     else if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} mid-term review: on pace \u2014 full payments continue.`);
+   if(played<1)return;                                   // signed for next season, not yet active
+   if(played<=SHOE_DEAL_LEN&&!d.renewDue){               // full annual payment through the term
+     t.budget+=SHOE_TIERS[d.tier].value;
+     if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} shoe deal: annual payment.`,SHOE_TIERS[d.tier].value);
    }
-   if(played>=SHOE_DEAL_LEN){                 // final review + expiry
-     const met=dealTargetsMet(t);
-     if(t.id===G.userTeam)logAdd(`${brandInfo(d.brand).name} deal ended: ${met}/4 targets met \u2014 ${met>=3?"they would happily re-sign you.":"they walk away."}`);
-     endDeal(t);
+   if(played>=SHOE_DEAL_LEN&&!d.renewDue){               // end of the 10-year term
+     const met=dealTargetsMet(t)>=3;
+     if(t.id===G.userTeam){
+       if(met){d.renewDue=true;                          // hold the slot; the choice is offered in the Office
+         const m=dealTargetsMet(t);if(m>=3)awardBadge("brand_loyal");if(m>=4)awardBadge("shoe_dog");
+         logAdd(`${brandInfo(d.brand).name} deal complete \u2014 targets met! Renew for another decade or hear rival pitches.`);}
+       else{logAdd(`${brandInfo(d.brand).name} deal ended: targets missed \u2014 they walk away.`);endDeal(t);}
+     }else{
+       if(met){d.start=G.season+1;t.budget+=SHOE_TIERS[d.tier].value;}  // AI auto-renews for another term
+       else endDeal(t);
+     }
    }
  });
  aiSponsorFill();
@@ -1271,48 +1295,200 @@ function aiSponsorFill(){
    });
  }
 }
-/* ---- user liaison cycle: evaluate a season, then pitch ---- */
+/* ---- user liaison cycle: evaluate a season, then pitch; at term end, renew ---- */
 function startLiaisonEval(){G.liaisonCycle={phase:"evaluating",since:G.season};}
-function buildShoeOffers(t){
+function buildShoeOffers(t,excludeBrand){
  const offers=[];
  for(const tier of["gold","silver","bronze"]){
    if(!shoeQualifies(t,tier))continue;
-   const open=openBrandInTier(tier);
-   if(open){offers.push({tier,brand:open.key,bump:null});}
-   else{
-     const holders=[];SHOE_TIERS[tier].brands.forEach(b=>brandHolders(b.key).forEach(h=>holders.push(h)));
-     const weakest=holders.sort((a,b)=>shoeResume(a)-shoeResume(b))[0];
-     if(weakest&&shoeResume(t)>shoeResume(weakest))offers.push({tier,brand:weakest.sponsor.brand,bump:weakest.id});
-   }
+   const open=SHOE_TIERS[tier].brands.find(b=>b.key!==excludeBrand&&brandHolders(b.key).length<SHOE_SLOTS);
+   if(open){offers.push({tier,brand:open.key,bump:null});continue;}
+   const holders=[];SHOE_TIERS[tier].brands.forEach(b=>{if(b.key!==excludeBrand)brandHolders(b.key).forEach(h=>holders.push(h));});
+   const weakest=holders.sort((a,b)=>shoeResume(a)-shoeResume(b))[0];
+   if(weakest&&shoeResume(t)>shoeResume(weakest))offers.push({tier,brand:weakest.sponsor.brand,bump:weakest.id});
  }
  return offers;
 }
 function userLiaisonTick(){
  const t=userTeamObj();if(!t)return;
  if(!G.liaison){G.liaisonCycle=null;return;}
- if(t.sponsor){G.liaisonCycle=null;return;}          // deal active: no cycle
- if(!G.liaisonCycle){startLiaisonEval();return;}      // (re)start after a deal ends
+ if(t.sponsor&&t.sponsor.renewDue){                       // term complete, awaiting the user's choice
+   if(!G.liaisonCycle||G.liaisonCycle.phase!=="renewal")
+     G.liaisonCycle={phase:"renewal",since:G.season,brand:t.sponsor.brand,tier:t.sponsor.tier,offers:buildShoeOffers(t,t.sponsor.brand)};
+   else if(G.season>G.liaisonCycle.since){endDeal(t);startLiaisonEval();}  // ignored a full season -> lapse
+   return;
+ }
+ if(t.sponsor){G.liaisonCycle=null;return;}               // active deal: no cycle
+ if(!G.liaisonCycle){startLiaisonEval();return;}          // (re)start after a deal ends
  if(G.liaisonCycle.phase==="evaluating"){
    const offers=buildShoeOffers(t);
    if(offers.length)G.liaisonCycle={phase:"offered",offers,since:G.season};
    else{G.liaisonCycle={phase:"evaluating",since:G.season};
      logAdd("Shoe brands passed this year \u2014 the liaison keeps working.");}
- }else if(G.liaisonCycle.phase==="offered"){
-   G.liaisonCycle={phase:"evaluating",since:G.season};  // an ignored pitch lapses
- }
+ }else{G.liaisonCycle={phase:"evaluating",since:G.season};}  // an ignored pitch lapses
 }
 function hireLiaison(){G.liaison=true;
  if(!userTeamObj().sponsor&&!G.liaisonCycle)startLiaisonEval();
  logAdd(`Hired a shoe brand liaison (${money(LIAISON_WAGE)}/wk) \u2014 they begin a season-long evaluation.`);saveGame(true);render();}
 function fireLiaison(){G.liaison=false;G.liaisonCycle=null;logAdd("Released the shoe brand liaison.");saveGame(true);render();}
-function acceptShoeOffer(idx){
- const t=userTeamObj();if(!t||!G.liaisonCycle||G.liaisonCycle.phase!=="offered")return;
- const o=G.liaisonCycle.offers[idx];if(!o)return;
- if(o.bump){const bumped=T(o.bump);if(bumped)endDeal(bumped);}
- signDeal(t,o.brand,G.season);                        // user deal starts this upcoming season
+function renewShoeDeal(){
+ const t=userTeamObj();if(!t||!t.sponsor||!t.sponsor.renewDue)return;
+ signDeal(t,t.sponsor.brand,G.season);                    // fresh 10-year term + re-sign bonus, clears renewDue
  G.liaisonCycle=null;saveGame(true);render();}
-function declineShoeOffers(){G.liaisonCycle={phase:"evaluating",since:G.season};
- logAdd("Turned down this year\u2019s shoe pitch.");saveGame(true);render();}
+function acceptShoeOffer(idx){
+ const t=userTeamObj();if(!t||!G.liaisonCycle)return;
+ const ph=G.liaisonCycle.phase;if(ph!=="offered"&&ph!=="renewal")return;
+ const o=G.liaisonCycle.offers[idx];if(!o)return;
+ if(ph==="renewal"&&t.sponsor)endDeal(t);                 // vacate the current brand before switching
+ if(o.bump){const bumped=T(o.bump);if(bumped)endDeal(bumped);}
+ signDeal(t,o.brand,G.season);
+ G.liaisonCycle=null;saveGame(true);render();}
+function declineShoeOffers(){
+ const t=userTeamObj();
+ if(G.liaisonCycle&&G.liaisonCycle.phase==="renewal"&&t&&t.sponsor){endDeal(t);logAdd("Ended the shoe partnership.");}
+ else logAdd("Turned down this year\u2019s shoe pitch.");
+ G.liaisonCycle={phase:"evaluating",since:G.season};saveGame(true);render();}
+/* ================= Achievements / badges =================
+   G.badges maps a badge id -> the season it was unlocked. Most unlock from derivable
+   state via checkBadges() (run each matchday and season end); a few fire from event
+   hooks (first whistle, first goal, hat-trick, big gate, etc.). All 84 show on the
+   Club screen's badge cabinet; locked ones are dimmed. */
+function _runMax(arr){let best=0,cur=0,prev=null;arr.slice().sort((a,b)=>a-b).forEach(s=>{cur=(prev!=null&&s===prev+1)?cur+1:1;if(cur>best)best=cur;prev=s;});return best;}
+function badgeCtx(){
+ const t=userTeamObj();if(!t)return null;
+ const reg=G.cups.regional||[],cont=G.cups.continental||[],gbl=G.gbLog||[];
+ const regWins=reg.filter(e=>e.winner===t.name&&e.region===t.region).map(e=>e.season);
+ const contWins=cont.filter(e=>e.winner===t.name&&e.region===t.region).map(e=>e.season);
+ const gbUser=gbl.filter(e=>e.team===t.id).length;
+ const mine=G.players.filter(p=>p.team===t.id);
+ return {t,budget:t.budget,prestige:t.prestige||0,
+   rank1:prestigeRank(t.id,globalPrestige())===1,
+   leagueRun:_runMax(t.leagueTitleSeasons||[]),regRun:_runMax(regWins),contRun:_runMax(contWins),
+   regWinCount:regWins.length,goatOwned:universeGoatId()!=null&&P(universeGoatId())&&P(universeGoatId()).team===t.id,
+   gbUser,
+   wcApp:mine.some(p=>(p.wcApps||0)>0),wcWin:mine.some(p=>(p.wcWins||0)>0),
+   wcWinners:mine.filter(p=>(p.wcWins||0)>0).length,wcSquadMax:0,
+   tippyApp:mine.some(p=>(p.tippyApps||0)>0),tippyWin:mine.some(p=>(p.tippyWins||0)>0),
+   dualIntl:mine.some(p=>(p.wcWins||0)>0&&(p.tippyWins||0)>0),
+   maxStadium:(t.stadiumLevel||0)>=STADIUM_TIERS.length,
+   fullSuite:(t.stadiumLevel||0)>=STADIUM_TIERS.length&&(t.facility||0)>=3&&t.jet&&t.supporters};
+}
+const BADGES=[
+ // league & promotion
+ {id:"first_whistle",name:"First Whistle",desc:"Play your first league matchday"},
+ {id:"up_ladder",name:"Up the Ladder",desc:"Earn promotion"},
+ {id:"double_jump",name:"Double Jump",desc:"Earn promotion in consecutive seasons"},
+ {id:"top_flight",name:"Top Flight",desc:"Reach the top division in your region",f:(t)=>t.tier===0},
+ {id:"invincibles",name:"Invincibles",desc:"Go a full league season unbeaten"},
+ {id:"three_peat",name:"Three-Peat",desc:"Win your division three seasons in a row",f:(t,x)=>x.leagueRun>=3},
+ {id:"dynasty",name:"Dynasty",desc:"Win 5 league titles with the same club",f:(t)=>(t.leagueTitles||0)>=5},
+ {id:"from_bottom",name:"From the Bottom",desc:"Start in tier 3 and become champions of tier 1"},
+ // regional cup
+ {id:"giant_killers",name:"Giant Killers",desc:"Eliminate a higher-tier club in the cup"},
+ {id:"cup_runners",name:"Cup Runners",desc:"Reach a regional cup final"},
+ {id:"cup_champions",name:"Cup Champions",desc:"Win your regional cup",f:(t)=>(t.cupTitles||0)>=1},
+ {id:"repeat_champions",name:"Repeat Champions",desc:"Win the regional cup in consecutive seasons",f:(t,x)=>x.regRun>=2},
+ {id:"cup_dynasty",name:"Cup Dynasty",desc:"Win the regional cup 5 times",f:(t)=>(t.cupTitles||0)>=5},
+ {id:"clean_sweep",name:"Clean Sweep",desc:"Win league + regional cup in the same season"},
+ {id:"group_heroes",name:"Group Stage Heroes",desc:"Qualify from a cup group as a best third-place team"},
+ // conrad
+ {id:"cont_qual",name:"Continental Qualification",desc:"Qualify for the Conrad Cup"},
+ {id:"conrad_contender",name:"Conrad Contender",desc:"Reach the Conrad Cup semi-finals"},
+ {id:"conrad_champions",name:"Conrad Champions",desc:"Win the Conrad Cup",f:(t)=>(t.contTitles||0)>=1},
+ {id:"b2b_conrad",name:"Back-to-Back Conrad",desc:"Win the Conrad Cup two seasons running",f:(t,x)=>x.contRun>=2},
+ {id:"conrad_legend",name:"Conrad Legend",desc:"Win the Conrad Cup 5 times",f:(t)=>(t.contTitles||0)>=5},
+ {id:"conrad_immortal",name:"Conrad Immortal",desc:"Win the Conrad Cup 10 times",f:(t)=>(t.contTitles||0)>=10},
+ // world cup / tippy
+ {id:"world_stage",name:"World Stage",desc:"Have a player appear in a World Cup",f:(t,x)=>x.wcApp},
+ {id:"world_champion",name:"World Champion",desc:"Have a player win the World Cup",f:(t,x)=>x.wcWin},
+ {id:"wc_factory",name:"World Cup Factory",desc:"Have 5 different players win a World Cup",f:(t,x)=>x.wcWinners>=5},
+ {id:"tippy_app",name:"Tippy Appearance",desc:"Have a player appear in the Tippy Cup",f:(t,x)=>x.tippyApp},
+ {id:"tippy_champ",name:"Tippy Champions",desc:"Have a player win the Tippy Cup",f:(t,x)=>x.tippyWin},
+ {id:"dual_intl",name:"Dual International",desc:"Have the same player win both World Cup and Tippy Cup",f:(t,x)=>x.dualIntl},
+ {id:"nation_builder",name:"Nation Builder",desc:"Supply 5+ players to a single World Cup-winning squad"},
+ {id:"cont_pride",name:"Continental Pride",desc:"Supply players to a Tippy Cup-winning area squad"},
+ // scoring
+ {id:"first_goal",name:"First Goal",desc:"Score your first league goal"},
+ {id:"golden_boot",name:"Golden Boot",desc:"Win the regional Golden Boot",f:(t,x)=>x.gbUser>=1},
+ {id:"boot_collector",name:"Boot Collector",desc:"Win the Golden Boot 3 times",f:(t,x)=>x.gbUser>=3},
+ {id:"boot_legend",name:"Boot Legend",desc:"Win the Golden Boot 10 times",f:(t,x)=>x.gbUser>=10},
+ {id:"club_record",name:"Club Record",desc:"Break your club\u2019s all-time scoring record"},
+ {id:"season_haul",name:"Season Haul",desc:"Have a player score 25+ goals in a season"},
+ {id:"hat_trick",name:"Hat-Trick Hero",desc:"Score a hat-trick in a match"},
+ {id:"goat_season",name:"GOAT Season",desc:"Have the universe GOAT on your books for a full season",f:(t,x)=>x.goatOwned},
+ {id:"goat_whisperer",name:"GOAT Whisperer",desc:"Sign the current universe GOAT",f:(t,x)=>x.goatOwned},
+ {id:"homegrown_hero",name:"Homegrown Hero",desc:"Win the Golden Boot with a player from your own region"},
+ {id:"aging_master",name:"Aging Master",desc:"Win the Golden Boot with a player aged 35+"},
+ {id:"teen_sensation",name:"Teenage Sensation",desc:"Have an under-20 score 15+ goals in a season"},
+ // finance
+ {id:"break_even",name:"Break Even",desc:"Finish a season positive after starting in the red"},
+ {id:"millionaire",name:"Millionaire Club",desc:"Reach \u00A31M bank balance",f:(t)=>t.budget>=1e6},
+ {id:"tycoon",name:"Tycoon",desc:"Reach \u00A310M bank balance",f:(t)=>t.budget>=1e7},
+ {id:"empire",name:"Empire",desc:"Reach \u00A3100M bank balance",f:(t)=>t.budget>=1e8},
+ {id:"billionaire",name:"Billionaire",desc:"Reach \u00A31B bank balance",f:(t)=>t.budget>=1e9},
+ {id:"sold_out",name:"Sold Out",desc:"Sell out your stadium (100% attendance)"},
+ {id:"box_office",name:"Box Office King",desc:"Earn \u00A3500k+ from a single matchday gate"},
+ // sponsorship
+ {id:"sponsor_magnet",name:"Sponsor Magnet",desc:"Land a Gold-tier shoe deal",f:(t)=>t.sponsor&&t.sponsor.tier==="gold"},
+ {id:"brand_loyal",name:"Brand Loyal",desc:"Complete a full 10-year shoe deal hitting 3 targets"},
+ {id:"shoe_dog",name:"Shoe Dog",desc:"Complete a full 10-year shoe deal hitting 4 targets"},
+ // infrastructure
+ {id:"groundbreaker",name:"Groundbreaker",desc:"Start your first stadium expansion"},
+ {id:"cathedral",name:"Cathedral",desc:"Reach maximum stadium capacity (100k)",f:(t,x)=>x.maxStadium},
+ {id:"temp_exile",name:"Temporary Exile",desc:"Complete a full season on a temporary ground"},
+ {id:"training_ground",name:"Training Ground",desc:"Build a Bronze training facility",f:(t)=>(t.facility||0)>=1},
+ {id:"elite_academy",name:"Elite Academy",desc:"Reach Gold training facility",f:(t)=>(t.facility||0)>=3},
+ {id:"frequent_flyers",name:"Frequent Flyers",desc:"Own a team jet and keep upkeep paid 5 seasons"},
+ {id:"twelfth_man",name:"12th Man",desc:"Hire a supporters\u2019 coordinator and keep them 5 seasons"},
+ {id:"full_suite",name:"Full Suite",desc:"Own max stadium + Gold facility + jet + supporters",f:(t,x)=>x.fullSuite},
+ {id:"infra_dynasty",name:"Infrastructure Dynasty",desc:"Complete every stadium tier with the same club",f:(t,x)=>x.maxStadium},
+ {id:"away_specialists",name:"Away Day Specialists",desc:"Win 10 away matches in a season with the jet active"},
+ // coaches & staff
+ {id:"first_coach",name:"First Appointment",desc:"Hire your first head coach"},
+ {id:"loyal_servant",name:"Loyal Servant",desc:"Keep the same head coach for 5 seasons"},
+ {id:"serial_sackings",name:"Serial Sackings",desc:"Sack 5 different head coaches"},
+ {id:"trait_master",name:"Trait Master",desc:"Win a title with each coach trait"},
+ {id:"elite_mind",name:"Elite Mind",desc:"Win a major trophy with an Elite Coach"},
+ {id:"youth_revolution",name:"Youth Revolution",desc:"Win a title with a Youth Developer coach"},
+ {id:"full_backroom",name:"Full Backroom",desc:"Hire all four staff roles at 5-star at once",
+   f:(t)=>["gk","def","att","fit"].every(r=>G.myStaff&&G.myStaff[r]&&G.myStaff[r].stars>=5)},
+ {id:"chief_scout",name:"Chief Scout",desc:"Hire the Chief Scout and sign a shortlist player"},
+ {id:"contract_whisperer",name:"Contract Whisperer",desc:"Renew a coach who demanded a big raise"},
+ {id:"retirement_watch",name:"Retirement Watch",desc:"Have a coach retire at 65 in your job"},
+ // transfers
+ {id:"window_warrior",name:"Window Warrior",desc:"Complete 5 transfers in a single window"},
+ {id:"free_agent_king",name:"Free Agent King",desc:"Sign 10 free agents in one career"},
+ {id:"cross_region",name:"Cross-Region Raid",desc:"Buy a player from a different region"},
+ {id:"scout_network",name:"Scout Network",desc:"Scout 10 different clubs in one season"},
+ {id:"zero_releases",name:"Zero Releases",desc:"Go 5 seasons without releasing a player"},
+ {id:"academy_pipeline",name:"Academy Pipeline",desc:"Develop 5 under-21s to 80+ OVR"},
+ // prestige & longevity
+ {id:"rising_power",name:"Rising Power",desc:"Reach 50 prestige",f:(t)=>(t.prestige||0)>=50},
+ {id:"global_elite",name:"Global Elite",desc:"Reach 80 prestige",f:(t)=>(t.prestige||0)>=80},
+ {id:"universe_1",name:"Universe #1",desc:"Hold the #1 prestige ranking in the world",f:(t,x)=>x.rank1},
+ {id:"century_club",name:"Century Club",desc:"Manage the same club for 100 seasons",f:()=>G.season>=100},
+ {id:"phoenix",name:"Phoenix",desc:"Fall to tier 3 and climb back to Conrad champions"},
+ {id:"clean_books",name:"Clean Books",desc:"Never go into the red across a 10-season span"},
+ {id:"empire_fc",name:"Empire FC",desc:"Unlock 50 other badges",f:()=>Object.keys(G.badges||{}).length>=50}
+];
+const BADGE_BY_ID={};BADGES.forEach(b=>BADGE_BY_ID[b.id]=b);
+function awardBadge(id){
+ if(!G.badges)G.badges={};
+ if(G.badges[id]!=null)return;
+ const b=BADGE_BY_ID[id];if(!b)return;
+ G.badges[id]=G.season;
+ logAdd(`\uD83C\uDFC5 Badge unlocked: ${b.name} \u2014 ${b.desc}.`);
+ try{toast(`\uD83C\uDFC5 Badge unlocked: ${b.name}!`);}catch(e){}
+}
+function checkBadges(){
+ if(!G.badges)G.badges={};
+ const t=userTeamObj();if(!t)return;
+ const x=badgeCtx();if(!x)return;
+ BADGES.forEach(b=>{if(b.f&&G.badges[b.id]==null){try{if(b.f(t,x))awardBadge(b.id);}catch(e){}}});
+ // badges that lean on tracked stats
+ const bs=G.badgeStats||{};
+ if(bs.hitBottom&&(t.contTitles||0)>=1)awardBadge("phoenix");
+}
 function aiStadiumTick(){
  G.teams.forEach(t=>{
    if(t.id===G.userTeam||t.building>0||(t.stadiumLevel||0)>=STADIUM_TIERS.length)return;
@@ -1336,6 +1512,7 @@ function startStadiumBuild(){
  t.pendingSeats=plan.target?Math.max(0,plan.target-t.capacity):plan.addSeats;
  const dur=(plan.years||1)===1?"a temporary ground this season":`a temporary ground for ${plan.years} seasons`;
  logAdd(`Stadium ${plan.label} begun. Playing in ${dur}.`,-plan.cost);
+ awardBadge("groundbreaker");
  saveGame(true);render();
 }
 /* ---- Office asset actions (user) ---- */
@@ -1379,11 +1556,13 @@ function financeTick(home,oppId){
  if(home&&G.ticketManager)G.ticketPrice=optimalTicketPrice(t,oppId);
  const att=home?attendance(t,oppId):0;
  const gate=att*G.ticketPrice;
+ if(home){if(gate>=500000)awardBadge("box_office");if(att>=effCapacity(t))awardBadge("sold_out");}
  const spon=sponsorWeekly(t),merch=merchWeekly(t);
  const pw=squadWage(t),sw=staffWage();
  const net=gate+spon+merch-pw-sw;
  const wasOk=t.budget>=0;
  t.budget+=net;
+ if(t.budget<0){G.badgeStats=G.badgeStats||{};G.badgeStats.wentRedThisSeason=true;}
  // the board tracks how long you stay in the red, and acts if you ignore it
  if(t.budget<0){
    G.redWeeks=(G.redWeeks||0)+1;
@@ -1545,6 +1724,14 @@ function maybeEvent(){
      logAdd(`${p.name} was sent off, but ${G.coach.name} argued the ban down on appeal. Fine stands.`,fine);
    }else{p.susp=1;
      logAdd(`${p.name} was sent off. Suspended for the next match.`,fine);}});
+ deck.push(()=>{const a=Math.round(60000+rep*260000);t.budget+=a;
+   logAdd("Fans love the new kit \u2014 replica shirts are flying off the shelves.",a);});
+ deck.push(()=>{const a=-Math.round(30000+rep*140000);t.budget+=a;
+   logAdd("Fans hate the new kit \u2014 sales flop and a batch is written off.",a);});
+ deck.push(()=>{const a=-Math.round(60000+rep*200000);t.budget+=a;
+   logAdd("A former player went on a podcast and accused the club of a toxic work culture. Sponsors got nervous.",a);});
+ deck.push(()=>{const a=Math.round(60000+rep*200000);t.budget+=a;
+   logAdd("A Times report highlighted your club for encouraging good mental health. Goodwill (and money) followed.",a);});
  const ev=pick(deck);ev();
  const last=G.log[0];
  toast(last.text+(last.amt?` (${last.amt>0?'+':''}${money(last.amt)})`:''));
@@ -1619,10 +1806,12 @@ function finishGroups(){
  const c=G.cup;c.phase="ko";
  const qual=[];const fourths=[];
  c.groups.forEach(g=>{const s=gsort(g);qual.push(...s.slice(0,2));fourths.push(s[2]);});
- qual.push(...gsort(fourths).slice(0,4));   // 12 + 4 best third-placed = 16
+ const bestThirds=gsort(fourths).slice(0,4);
+ qual.push(...bestThirds);   // 12 + 4 best third-placed = 16
  c.koAlive=shuffle(qual);
  c.log.unshift({round:"Group stage",line:"16 clubs advance to the Round of 16."});
  if(qual.includes(G.userTeam)){
+   if(bestThirds.includes(G.userTeam))awardBadge("group_heroes");
    T(G.userTeam).budget+=QUALIFY_BONUS;
    logAdd(`${CUP}: qualified for the Round of 16.`,QUALIFY_BONUS);
    if(!QUIET)toast(`${CUP}: you qualified for the knockouts! +${money(QUALIFY_BONUS)}`);
@@ -1684,6 +1873,8 @@ function playCupRound(){
        const home=h===G.userTeam;
        cupUserRecord(CUP_KO_MARKS[c.koStage],home?hg:ag,home?ag:hg,pens);
        const isFinal=c.koStage===KO_NAMES.length-1;   // last round is the final
+       if(isFinal)awardBadge("cup_runners");
+       {const _opp=home?a:h;if(wnr===G.userTeam&&T(_opp)&&(T(_opp).tier||0)<(T(G.userTeam).tier||0))awardBadge("giant_killers");}
        if(wnr===G.userTeam){const prize=KO_PRIZE[c.koStage];T(G.userTeam).budget+=prize;
          logAdd(`${CUP}: ${isFinal?"CHAMPIONS \u2014 the cup is yours!":"won the "+KO_NAMES[c.koStage]+"."}`,prize);
          if(!QUIET)toast(`${CUP} ${KO_NAMES[c.koStage]}: ${line} \u2014 ${isFinal?"you win the cup!":"you advance!"} +${money(prize)}`);}
@@ -1805,6 +1996,59 @@ function endSeason(){
  // record regional cup winner into cups history
  if(G.cup&&G.cup.winner!==null)
    G.cups.regional.push({season:G.season,region:ureg,winner:T(G.cup.winner).name});
+ // ---- season-triggered badges (gs/xi still intact, promotion/relegation resolved) ----
+ {const _ut=userTeamObj();if(_ut){
+   const bs=G.badgeStats||(G.badgeStats={});
+   if(bs.startTier===undefined)bs.startTier=_playedTier;
+   squadOf(_ut).forEach(p=>{if(!p)return;
+     if((p.gs||0)>=25)awardBadge("season_haul");
+     if(p.age<20&&(p.gs||0)>=15)awardBadge("teen_sensation");
+     if(p.age<=21)p._userYouth=true;                       // a young player developing at your club
+     if(p._userYouth&&p.ovr>=80){(bs.academyGrads=bs.academyGrads||{})[p.id]=1;}});
+   if(Object.keys(bs.academyGrads||{}).length>=5)awardBadge("academy_pipeline");
+   // club all-time scoring record: award when a current player surpasses the prior high
+   {const cur=squadOf(_ut).map(p=>(p&&p.gc)||0),frozen=Object.values(_ut.scorers||{}).map(s=>s.goals||0);
+    const allTime=Math.max(0,...cur,...frozen),curMax=Math.max(0,...cur);
+    if(bs.clubRecord==null)bs.clubRecord=allTime;
+    else if(curMax>bs.clubRecord){awardBadge("club_record");bs.clubRecord=curMax;}
+    if(allTime>bs.clubRecord)bs.clubRecord=allTime;}
+   const wonLeague=_playedTier===0&&RT[ureg][0][0].id===G.userTeam;
+   const wonCup=G.cup&&G.cup.winner===G.userTeam;
+   if(promoted.has(G.userTeam)){awardBadge("up_ladder");
+     if(bs.lastPromoSeason===G.season-1)awardBadge("double_jump");
+     bs.lastPromoSeason=G.season;}
+   if(wonLeague){
+     if(bs.startTier===2)awardBadge("from_bottom");
+     if(G.coach){(bs.titleTraits=bs.titleTraits||{})[G.coach.trait]=1;
+       if(Object.keys(bs.titleTraits).length>=Object.keys(COACH_TRAITS).length)awardBadge("trait_master");
+       if(coachTier()>=3)awardBadge("elite_mind");
+       if(G.coach.trait==="youth"&&(G.xi||[]).map(P).filter(p=>p&&p.age<23).length>=3)awardBadge("youth_revolution");}
+   }
+   if(wonLeague&&wonCup)awardBadge("clean_sweep");
+   if(wonCup&&coachTier()>=3)awardBadge("elite_mind");
+   if(_ut.st&&(_ut.st.P||0)>0&&(_ut.st.L||0)===0)awardBadge("invincibles");
+   const gbw=mine&&P(mine.id);
+   if(gbw&&gbw.team===G.userTeam){
+     if(gbw.region===_ut.region)awardBadge("homegrown_hero");
+     if(gbw.age>=35)awardBadge("aging_master");}
+   if(bs.seasonStartBudget!=null&&bs.seasonStartBudget<0&&_ut.budget>=0)awardBadge("break_even");
+   if((_ut.building||0)>0)awardBadge("temp_exile");
+   if(G.coach){bs.coachTenure=(bs.coachId===G.coach.id)?(bs.coachTenure||0)+1:1;bs.coachId=G.coach.id;
+     if(bs.coachTenure>=5)awardBadge("loyal_servant");}
+   else{bs.coachTenure=0;bs.coachId=null;}
+   bs.jetStreak=(_ut.jet&&_ut.jetMaint==="paid")?(bs.jetStreak||0)+1:0;
+   if(bs.jetStreak>=5)awardBadge("frequent_flyers");
+   bs.supStreak=_ut.supporters?(bs.supStreak||0)+1:0;
+   if(bs.supStreak>=5)awardBadge("twelfth_man");
+   bs.noRelease=bs.releasedThisSeason?0:(bs.noRelease||0)+1;bs.releasedThisSeason=false;
+   if(bs.noRelease>=5)awardBadge("zero_releases");
+   bs.cleanBooks=(!bs.wentRedThisSeason&&_ut.budget>=0)?(bs.cleanBooks||0)+1:0;bs.wentRedThisSeason=false;
+   if(bs.cleanBooks>=10)awardBadge("clean_books");
+   if((bs.awayJetWins||0)>=10)awardBadge("away_specialists");
+   bs.awayJetWins=0;
+   bs.scoutedIds={};
+   if(_playedTier===2)bs.hitBottom=true;
+ }}
  generateNarratives(RT,ureg,boot,promoted,relegated);
  boardForcedSales();
  sellingClubSales();
@@ -1842,6 +2086,7 @@ function endSeason(){
  G.teams.forEach(t=>t.st=blankStd());
  rebuildTierTeams();
  sponsorTick();
+ checkBadges();
  G.matchday=0;G.season++;G.lastResults=null;G.xi=null;G.results=[];
  G.scouted={};G.refused={};G.window={day:1,offersMade:0};G.offers=[];genOffers();
  G.superShort=null;if(G.superScout)buildSuperShortlist();
@@ -1975,8 +2220,8 @@ function sparkline(vals,h){
    <circle cx="${lx-2}" cy="${ly}" r="3" fill="var(--honey2)"/></svg>`;
 }
 function prestigeLabel(v){
- return v>=80?"Continental giant":v>=60?"Established power":v>=40?"Well regarded":
-        v>=22?"Modest":v>=10?"Little known":"Unknown";
+ return v>=80?"Continental Giant":v>=60?"Established Power":v>=40?"Well Regarded":
+        v>=22?"Modest":v>=10?"Little Known":"Unknown";
 }
 function simulateRegionalCup(regionKey,RT){
  // Quick single-elimination for non-user regions so cupTitles stay accurate.
@@ -2035,6 +2280,7 @@ function contPlayRound(st){
    st.log.unshift({round:rn,line});
    st.lastRound.lines.push({line,user:h===G.userTeam||a===G.userTeam,won:wnr===G.userTeam});
    if(h===G.userTeam||a===G.userTeam){
+     if(rn==="Semifinal")awardBadge("conrad_contender");
      if(wnr===G.userTeam){const pr=CONT_PRIZE[Math.min(st.round,3)];T(G.userTeam).budget+=pr;
        logAdd(`${CONT_CUP}: won a ${rn}.`,pr);}
      else{st.userOut=true;logAdd(`${CONT_CUP}: knocked out in the ${rn}.`);}
@@ -2061,6 +2307,7 @@ function runContinentalCup(RT){
  const q=contQualifiers(RT);
  const st={alive:shuffle(q.slice()),round:0,log:[],qualified:q.includes(G.userTeam),
    userOut:!q.includes(G.userTeam),finished:false};
+ if(st.qualified)awardBadge("cont_qual");
  while(!st.finished)contPlayRound(st);
 }
 function startContinentalCup(){
@@ -2069,6 +2316,7 @@ function startContinentalCup(){
  const q=contQualifiers(RT);
  G.contLive={alive:shuffle(q.slice()),round:0,log:[],qualified:q.includes(G.userTeam),
    userOut:!q.includes(G.userTeam),finished:false};
+ if(G.contLive.qualified)awardBadge("cont_qual");
  saveGame(true);
 }
 function natStrength(country){
@@ -2144,6 +2392,7 @@ function runTippyCup(){
  Object.keys(gamesPlayed).forEach(id=>{const p=P(+id);if(!p)return;const g=gamesPlayed[id];
    if(g>0){awardXP(p,g);p.tippyApps=(p.tippyApps||0)+g;}});
  (squads[champ]||[]).forEach(id=>{const p=P(+id);if(p)p.tippyWins=(p.tippyWins||0)+1;});
+ if((squads[champ]||[]).map(id=>P(+id)).some(p=>p&&p.team===G.userTeam))awardBadge("cont_pride");
  if(!G.cups.tippy)G.cups.tippy=[];
  const rec={season:G.season,champion:champ,finalists,squads,gamesPlayed,log:log.slice(0,8)};
  G.cups.tippy.push(rec);G.lastTippy=rec;
@@ -2188,6 +2437,7 @@ function runWorldCup(){
    p.wcApps=(p.wcApps||0)+g;
  });
  (squads[champ]||[]).forEach(id=>{const p=P(+id);if(p){p.wcWins=(p.wcWins||0)+1;}});
+ if((squads[champ]||[]).map(id=>P(+id)).filter(p=>p&&p.team===G.userTeam).length>=5)awardBadge("nation_builder");
  G.cups.world.push({season:G.season,champion:champ,semifinalists:semi,finalists,
    squads,gamesPlayed,log:log.slice(0,8)});
  G.lastWC={season:G.season,champion:champ,semifinalists:semi,finalists,squads,gamesPlayed,log:log.slice(0,8)};
@@ -2202,8 +2452,8 @@ function ageAndRenew(){
    // Scale attributes by how far the age curve moved this year, NOT by target/ovr.
    // Dividing by the weighted ovr stripped each player's positional tilt on their
    // first birthday, permanently deflating the whole world by ~6 OVR after season 1.
-   const prev=ovrFromAge(p.pot,Math.min(Math.max(p.age-1,16),40));
-   const target=ovrFromAge(p.pot,Math.min(p.age,40));
+   const prev=ovrFromAge(effPot(p),Math.min(Math.max(p.age-1,16),40));
+   const target=ovrFromAge(effPot(p),Math.min(p.age,40));
    const scale=target/Math.max(1,prev);
    const _at=attrsFor(p.pos);
    _at.forEach(a=>p[a]=clamp(Math.round(p[a]*scale+rnd(-1,1)),18,99));
@@ -2274,6 +2524,7 @@ function coachSeasonTick(){
  if(G.coach){
    G.coach.age++;
    if(G.coach.age>=65){
+     awardBadge("retirement_watch");
      logAdd(`${G.coach.name} retired at 65 after a lifetime in the game.`);
      G.news.unshift({season:G.season,text:`Head coach ${G.coach.name} retires from football.`});
      G.coach=null;delete G.coachRenewal;
@@ -2370,6 +2621,8 @@ function buyScout(teamId){
  const cost=scoutCost();const t=userTeamObj();
  if(t.budget<cost)return toast("Not enough budget to scout them.");
  t.budget-=cost;G.scouted[teamId]=true;
+ {const bs=G.badgeStats||(G.badgeStats={});bs.scoutedIds=bs.scoutedIds||{};bs.scoutedIds[teamId]=1;
+  if(Object.keys(bs.scoutedIds).length>=10)awardBadge("scout_network");}
  logAdd(`Scouted ${T(teamId).name} for the season.`,-cost);
  saveGame(true);render();
 }
@@ -2427,6 +2680,10 @@ function buyPlayer(p){
  t.budget-=fee;seller.budget+=fee;
  seller.squad=seller.squad.filter(x=>x!==p.id);
  p.team=t.id;t.squad.push(p.id);
+ {const bs=G.badgeStats||(G.badgeStats={});
+  bs.windowSigns=(bs.windowSigns||0)+1;if(bs.windowSigns>=5)awardBadge("window_warrior");
+  if(p.region!==t.region)awardBadge("cross_region");
+  if(G.superScout&&(G.superShort||[]).includes(p.id))awardBadge("chief_scout");}
  G.window.offersMade++;
  logAdd(`Signed ${p.name} from ${seller.name} for ${money(fee)}.`,-fee);
  toast(`Signed ${p.name} for ${money(fee)}.`);squadCapNotice();saveGame(true);render();
@@ -2509,9 +2766,9 @@ function acceptOffer(o){
 }
 function rejectOffer(o){G.offers=G.offers.filter(x=>x!==o);render();}
 function advanceWindowDay(){
- if(G.window.day>=3){G.window.day=4;toast("Transfer window closed. Season begins.");}
+ if(G.window.day>=3){G.window.day=4;toast("Transfer Window closed. Season begins.");}
  else{G.window.day++;G.window.offersMade=0;genOffers();
-   toast(`Transfer window \u2014 Day ${G.window.day}.`);}
+   toast(`Transfer Window \u2014 Day ${G.window.day}.`);}
  saveGame(true);render();
 }
 
@@ -2684,9 +2941,24 @@ function renderStart(){
 }
 
 /* ---------- CLUB ---------- */
+function badgeCabinetCard(){
+ const got=G.badges||{},n=Object.keys(got).length;
+ const card=$(`<div class="card"></div>`);
+ card.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">\uD83C\uDFC5 Badge cabinet \u00B7 <span class="gold">${n}</span> / ${BADGES.length}</h3>`));
+ card.appendChild($(`<div class="small muted" style="margin-bottom:8px">Tap a badge to see how it\u2019s earned. Locked badges are dimmed.</div>`));
+ const grid=$(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>`);
+ BADGES.forEach(b=>{
+   const on=got[b.id]!=null;
+   const cell=$(`<div class="small" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px;cursor:pointer;${on?'':'opacity:.42'}">${on?'\uD83C\uDFC5 ':'\uD83D\uDD12 '}<b class="${on?'gold':''}">${b.name}</b>${on?`<br><span class="muted" style="font-size:11px">Unlocked \u00B7 Season ${got[b.id]}</span>`:''}</div>`);
+   cell.onclick=()=>toast(`${b.name} \u2014 ${b.desc}${on?` (Season ${got[b.id]})`:""}`);
+   grid.appendChild(cell);
+ });
+ card.appendChild(grid);
+ return card;
+}
 function trophyCard(t){
  const c=$(`<div class="card"></div>`);
- c.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Trophy cabinet</h3>`));
+ c.appendChild($(`<h3 style="font-size:15px;margin-bottom:6px">Trophy Cabinet</h3>`));
  const cupName=(REGION_CUP[t.region]||"Regional Cup").replace("The ","");
  const contName=CONT_CUP.replace("The ","");
  const leagueSeasons=(t.leagueTitleSeasons&&t.leagueTitleSeasons.length)
@@ -2801,16 +3073,17 @@ function viewClub(w){
 
  // trophies + all-time goal leaders
  w.appendChild(trophyCard(t));
+ w.appendChild(badgeCabinetCard());
  w.appendChild(clubLegendsCard(t,"Club goalscoring record"));
 
  // Clear priority: window first, then in-season play, then season-end advance.
  if(inWindow()){
    w.appendChild($(`<div class="card center" style="border-color:var(--honey)">
-     <b class="gold">Transfer window \u00B7 Day ${G.window.day} of 3</b>
+     <b class="gold">Transfer Window \u00B7 Day ${G.window.day} of 3</b>
      <div class="small muted" style="margin:4px 0 10px">Sign free agents, trade in the World tab, and review offers in the Market. When you are ready, move to the next day.</div></div>`));
    const bm=$(`<button class="btn sec" style="margin-bottom:8px">Go to the transfer market</button>`);
    bm.onclick=()=>{TAB="transfers";render()};w.appendChild(bm);
-   const bd=$(`<button class="btn">${G.window.day>=3?"Close window and start the season":"Advance to window Day "+(G.window.day+1)}</button>`);
+   const bd=$(`<button class="btn">${G.window.day>=3?"Close window and start the season":"Advance to Window Day "+(G.window.day+1)}</button>`);
    bd.onclick=()=>advanceWindowDay();w.appendChild(bd);
  }else if(G.matchday<SEASON_LEN){
    const nx=upcomingFixture();
@@ -2819,14 +3092,14 @@ function viewClub(w){
    // a cup round plays AFTER this matchday if (matchday+1) is a cup mark
    const cupMark=ALL_CUP_MARKS.includes(G.matchday+1);
    const b=$(`<button class="btn ${cupMark?'cup':'league'}">${cupMark
-     ?`Play matchday ${G.matchday+1} + ${CUP} round`
-     :`Play league matchday ${G.matchday+1}`}</button>`);
+     ?`Play Matchday ${G.matchday+1} + ${CUP} round`
+     :`Play League Matchday ${G.matchday+1}`}</button>`);
    b.onclick=()=>{playMatchday();render()};
    w.appendChild(b);
    w.appendChild($(`<div class="small muted center" style="margin-top:6px">
-     <span style="color:#e0b93a">\u25A0</span> league \u00B7
-     <span style="color:#d1447f">\u25A0</span> ${regionOf(t.region).name} cup \u00B7
-     <span style="color:#3fa96a">\u25A0</span> ${CONT_CUP}</div>`));
+     <span style="color:#e0b93a">\u25A0</span> League \u00B7
+     <span style="color:#d1447f">\u25A0</span> ${regionOf(t.region).name} Cup \u00B7
+     <span style="color:#3fa96a">\u25A0</span> ${CONT_CUP.replace("The ","")}</div>`));
  }else{
    // Season over: the Conrad Cup plays now — round by round if you're in it.
    const advance=()=>{const before=userTeamObj().tier;endSeason();
@@ -3263,6 +3536,11 @@ function signPlayer(p){
  if(t.squad.length>=30)return toast("Squad is full (30 max). Sell or release a player to make room.");
  t.budget-=p.value;G.freeAgents=G.freeAgents.filter(x=>x!==p.id);
  p.team=t.id;t.squad.push(p.id);
+ {const bs=G.badgeStats||(G.badgeStats={});
+  bs.faSigns=(bs.faSigns||0)+1;if(bs.faSigns>=10)awardBadge("free_agent_king");
+  bs.windowSigns=(bs.windowSigns||0)+1;if(bs.windowSigns>=5)awardBadge("window_warrior");
+  if(p.region!==t.region)awardBadge("cross_region");
+  if(G.superScout&&(G.superShort||[]).includes(p.id))awardBadge("chief_scout");}
  logAdd(`Signed ${p.name}.`,-p.value);
  toast(`Signed ${p.name} for ${money(p.value)}.`);squadCapNotice();saveGame(true);render();
 }
@@ -3274,6 +3552,7 @@ function releasePlayer(p){
  if(!confirm(`Release ${p.name}? They leave for free and their wage comes off the books.`))return;
  t.squad=t.squad.filter(x=>x!==p.id);p.team=null;G.freeAgents.push(p.id);
  if(G.xi)G.xi=G.xi.filter(id=>id!==p.id);
+ G.badgeStats=G.badgeStats||{};G.badgeStats.releasedThisSeason=true;
  logAdd(`Released ${p.name}.`);
  toast(`${p.name} released.`);saveGame(true);render();
 }
@@ -3452,18 +3731,31 @@ function viewOffice(w){
   }else if(t.sponsor){
     const d=t.sponsor,bi=brandInfo(d.brand),tier=SHOE_TIERS[d.tier];
     const year=clamp(G.season-d.start+1,1,SHOE_DEAL_LEN);
-    sp.appendChild($(`<div class="small" style="margin-bottom:4px">Sponsored by <b class="gold">${bi.name}</b> (${tier.name} tier) \u00B7 Year ${year} of ${SHOE_DEAL_LEN}</div>`));
-    const payNote=d.payTier!==d.tier?` <span style="color:var(--loss)">(cut to ${SHOE_TIERS[d.payTier].name} rate after the mid-term review)</span>`:"";
-    sp.appendChild($(`<div class="small muted" style="margin-bottom:6px">Pays ${money(SHOE_TIERS[d.payTier].value)}/yr${payNote}.</div>`));
     const pr=dealProgress(t),met=dealTargetsMet(t);
     const labels={conrad:"Conrad Cups",gb:"Golden Boots",regional:"Regional Cups",league:"League titles"};
-    const grid=$(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"></div>`);
-    SHOE_KEYS.forEach(k=>{const need=tier.targets[k],have=pr[k],ok=have>=need;
-      grid.appendChild($(`<div class="small" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px">${ok?'<span class="gold">\u2714</span> ':''}${labels[k]}<br><b class="${ok?'gold':''}">${have}</b> / ${need}</div>`));});
-    sp.appendChild(grid);
-    sp.appendChild($(`<div class="small" style="margin-bottom:4px">Targets met: <b class="${met>=3?'gold':''}">${met}/4</b> (need 3 of 4 to keep the deal).</div>`));
-    sp.appendChild($(`<div class="small muted">${!d.mid?`Mid-term review at Year 5 \u2014 fall badly off pace and payments drop a tier.`:(d.payTier!==d.tier?"Mid-term review passed: off pace, payments were reduced.":"Mid-term review passed: on pace.")}</div>`));
-    const fb=$(`<button class="btn sm sec" style="margin-top:8px">Release liaison</button>`);fb.onclick=fireLiaison;sp.appendChild(fb);
+    if(d.renewDue){
+      sp.appendChild($(`<div class="small" style="margin-bottom:6px"><b class="gold">${bi.name}</b> (${tier.name} tier) \u2014 your 10-year deal is complete and you <b class="gold">hit the targets</b> (${met}/4). Renew for another decade, or hear rival pitches:</div>`));
+      const rb=$(`<button class="btn sm" style="margin-bottom:8px">Renew with ${bi.name} \u00B7 ${money(tier.value)}/yr + ${money(tier.value)} bonus</button>`);rb.onclick=renewShoeDeal;sp.appendChild(rb);
+      const offers=(G.liaisonCycle&&G.liaisonCycle.offers)||[];
+      if(offers.length){
+        sp.appendChild($(`<div class="small muted" style="margin-bottom:6px">Rival pitches:</div>`));
+        offers.forEach((o,i)=>{const obi=brandInfo(o.brand),ot=SHOE_TIERS[o.tier];
+          const box=$(`<div style="margin-bottom:8px;padding:10px;border:1px solid var(--line);border-radius:8px"></div>`);
+          box.appendChild($(`<div class="small"><b>${obi.name}</b> \u00B7 ${ot.name} tier \u00B7 ${money(ot.value)}/yr + bonus${o.bump?` <span style="color:var(--loss)">(replaces ${T(o.bump)?T(o.bump).name:"a rival"})</span>`:""}</div>`));
+          const ab=$(`<button class="btn sm" style="margin-top:6px">Switch to ${obi.name}</button>`);ab.onclick=()=>acceptShoeOffer(i);box.appendChild(ab);
+          sp.appendChild(box);});
+      }
+      const dec=$(`<button class="btn sm sec">End the partnership</button>`);dec.onclick=declineShoeOffers;sp.appendChild(dec);
+    }else{
+      sp.appendChild($(`<div class="small" style="margin-bottom:4px">Sponsored by <b class="gold">${bi.name}</b> (${tier.name} tier) \u00B7 Year ${year} of ${SHOE_DEAL_LEN}</div>`));
+      sp.appendChild($(`<div class="small muted" style="margin-bottom:6px">Pays ${money(tier.value)}/yr for the full term \u2014 funding is secure regardless of pace.</div>`));
+      const grid=$(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"></div>`);
+      SHOE_KEYS.forEach(k=>{const need=tier.targets[k],have=pr[k],ok=have>=need;
+        grid.appendChild($(`<div class="small" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px">${ok?'<span class="gold">\u2714</span> ':''}${labels[k]}<br><b class="${ok?'gold':''}">${have}</b> / ${need}</div>`));});
+      sp.appendChild(grid);
+      sp.appendChild($(`<div class="small" style="margin-bottom:4px">Targets met: <b class="${met>=3?'gold':''}">${met}/4</b> (hit 3 of 4 by Year ${SHOE_DEAL_LEN} to earn a renewal).</div>`));
+      const fb=$(`<button class="btn sm sec" style="margin-top:8px">Release liaison</button>`);fb.onclick=fireLiaison;sp.appendChild(fb);
+    }
   }else if(G.liaisonCycle&&G.liaisonCycle.phase==="offered"){
     sp.appendChild($(`<div class="small" style="margin-bottom:8px">The liaison has brought <b class="gold">${G.liaisonCycle.offers.length} pitch${G.liaisonCycle.offers.length>1?"es":""}</b>. Pick one (or decline and keep looking):</div>`));
     G.liaisonCycle.offers.forEach((o,i)=>{
