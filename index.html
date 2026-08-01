@@ -1025,6 +1025,9 @@ function playMatchday(){
  // Tactician still prepares for this exact opponent.
  if(G.coachAuto&&coachTier()>0)coachRunSetup();
  if(G.matchday===0){G.badgeStats=G.badgeStats||{};G.badgeStats.seasonStartBudget=userTeamObj().budget;}
+ // Every 5 seasons, right before the last league matchday, drop the bomb: every club
+ // loses one key player to an off-field crisis. Guarded so it fires once per cycle.
+ if(G.season>0&&G.season%5===0&&G.matchday===SEASON_LEN-1&&!G.bombDone){G.bombDone=G.season;fiveYearBomb();}
  const fx=G.fixtures[G.matchday],out=[];
  let userHome=null,userOpp=null;
  REGIONS.forEach(reg=>{
@@ -1039,7 +1042,8 @@ function playMatchday(){
          G.results.push({md:G.matchday,opp:home?a:h,home,gf:home?hg:ag,ga:home?ag:hg});
          G.lastScorers={mine:home?hs:asc,theirs:home?asc:hs};
          const _gf=home?hg:ag,_ga=home?ag:hg;
-         if(!home&&_gf>_ga&&jetActive(userTeamObj())){G.badgeStats=G.badgeStats||{};G.badgeStats.awayJetWins=(G.badgeStats.awayJetWins||0)+1;}}
+         if(!home&&_gf>_ga&&jetActive(userTeamObj())){G.badgeStats=G.badgeStats||{};G.badgeStats.awayJetWins=(G.badgeStats.awayJetWins||0)+1;}
+         if(G.bombVictimPending){if(_gf>_ga)awardBadge("next_man_up");G.bombVictimPending=false;}}
        out.push({region:reg.key,tier,h,a,hg,ag});
      });
    }
@@ -1468,6 +1472,7 @@ const BADGES=[
  {id:"universe_1",name:"Universe #1",desc:"Hold the #1 prestige ranking in the world",f:(t,x)=>x.rank1},
  {id:"century_club",name:"Century Club",desc:"Manage the same club for 100 seasons",f:()=>G.season>=100},
  {id:"phoenix",name:"Phoenix",desc:"Fall to tier 3 and climb back to Conrad champions"},
+ {id:"next_man_up",name:"Next Man Up",desc:"Win the very next match after a first-team player is called away by an off-field crisis"},
  {id:"clean_books",name:"Clean Books",desc:"Never go into the red across a 10-season span"},
  {id:"empire_fc",name:"Empire FC",desc:"Unlock 50 other badges",f:()=>Object.keys(G.badges||{}).length>=50}
 ];
@@ -1488,6 +1493,45 @@ function checkBadges(){
  // badges that lean on tracked stats
  const bs=G.badgeStats||{};
  if(bs.hitBottom&&(t.contTitles||0)>=1)awardBadge("phoenix");
+}
+/* ================= Five-year bomb =================
+   Once every 5 seasons, right before the last league matchday, football is briefly
+   reminded that footballers are humans. Every club loses one random 70+ OVR player
+   to an off-field crisis; a 16-year-old is called up in his place. The player's ID
+   stays in the world (records/history still resolve) but he is retired: team=null,
+   not returned to the free-agent pool. Runs on the user's club and every AI club. */
+const BOMB_REASONS=[
+ "a personal crisis","a family emergency","a recent conviction",
+ "a private matter","a health scare","a legal dispute"];
+function fiveYearBomb(){
+ const dep=[];
+ G.teams.forEach(t=>{
+   const cand=squadOf(t).filter(p=>p&&(p.ovr||0)>70);
+   if(!cand.length)return;
+   const victim=pick(cand),reason=pick(BOMB_REASONS);
+   // freeze goal record before he leaves so club scoring history is preserved
+   if(!t.scorers)t.scorers={};
+   if(!t.scorers[victim.id])t.scorers[victim.id]={name:victim.name,pos:victim.pos,goals:victim.gc||0};
+   else t.scorers[victim.id].goals=Math.max(t.scorers[victim.id].goals,victim.gc||0);
+   t.squad=t.squad.filter(id=>id!==victim.id);
+   victim.team=null;victim.retired=true;   // gone for good; not recycled to free agents
+   if(t.id===G.userTeam&&G.xi)G.xi=G.xi.filter(id=>id!==victim.id);
+   const kid=newPlayer(G.nextPid++,victim.pos,16,t.region);
+   kid.team=t.id;t.squad.push(kid.id);G.players.push(kid);
+   dep.push({team:t,victim,reason,kid});
+ });
+ const mine=dep.find(d=>d.team.id===G.userTeam);
+ if(mine){
+   G.bombVictimPending=true;   // cleared after this matchday resolves (win -> badge)
+   logAdd(`\u26A0\uFE0F Due to ${mine.reason}, ${mine.victim.name} has left the club indefinitely. Sixteen-year-old ${mine.kid.name} has been called up in his place.`);
+   try{toast(`\u26A0\uFE0F ${mine.victim.name} out (${mine.reason}). ${mine.kid.name} called up.`);}catch(e){}
+ }
+ // world-news feed: a headline per departing club so the user sees who else lost whom
+ G.news=G.news||[];
+ dep.filter(d=>d.team.id!==G.userTeam).forEach(d=>{
+   G.news.unshift({season:G.season,text:`${d.victim.name} left ${d.team.name} indefinitely due to ${d.reason}. A 16-year-old was called up.`});
+ });
+ if(dep.length>1)logAdd(`Around the league: ${dep.length-1} other club${dep.length-1===1?"":"s"} lost a first-team player to off-field matters.`);
 }
 function aiStadiumTick(){
  G.teams.forEach(t=>{
@@ -2087,6 +2131,7 @@ function endSeason(){
  rebuildTierTeams();
  sponsorTick();
  checkBadges();
+ G.bombDone=null;
  G.matchday=0;G.season++;G.lastResults=null;G.xi=null;G.results=[];
  G.scouted={};G.refused={};G.window={day:1,offersMade:0};G.offers=[];genOffers();
  G.superShort=null;if(G.superScout)buildSuperShortlist();
