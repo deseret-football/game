@@ -2943,9 +2943,9 @@ function renderStart(){
 /* ---------- CLUB ---------- */
 function badgeCabinetCard(){
  const got=G.badges||{},n=Object.keys(got).length;
- const card=$(`<div class="card"></div>`);
- card.appendChild($(`<h3 style="font-size:15px;margin-bottom:4px">\uD83C\uDFC5 Badge cabinet \u00B7 <span class="gold">${n}</span> / ${BADGES.length}</h3>`));
- card.appendChild($(`<div class="small muted" style="margin-bottom:8px">Tap a badge to see how it\u2019s earned. Locked badges are dimmed.</div>`));
+ const card=$(`<details class="card" style="padding:10px"></details>`);
+ card.appendChild($(`<summary style="cursor:pointer;font-weight:700;font-size:15px">\uD83C\uDFC5 Badge cabinet \u00B7 <span class="gold">${n}</span> / ${BADGES.length}</summary>`));
+ card.appendChild($(`<div class="small muted" style="margin:8px 0">Tap a badge to see how it\u2019s earned. Locked badges are dimmed.</div>`));
  const grid=$(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>`);
  BADGES.forEach(b=>{
    const on=got[b.id]!=null;
@@ -3073,7 +3073,6 @@ function viewClub(w){
 
  // trophies + all-time goal leaders
  w.appendChild(trophyCard(t));
- w.appendChild(badgeCabinetCard());
  w.appendChild(clubLegendsCard(t,"Club goalscoring record"));
 
  // Clear priority: window first, then in-season play, then season-end advance.
@@ -3779,6 +3778,9 @@ function viewOffice(w){
     const fb=$(`<button class="btn sm sec" style="margin-top:8px">Release liaison</button>`);fb.onclick=fireLiaison;sp.appendChild(fb);
   }
   w.appendChild(sp);}
+
+ // ---- Badge cabinet (collapsed by default) ----
+ w.appendChild(badgeCabinetCard());
 
  // scouting department (tiered)
  const scc=$(`<div class="card"></div>`);
