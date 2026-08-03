@@ -3200,8 +3200,9 @@ function bettingCard(){
    const mult=xg?scoreMultFrom(xg,_betGF,_betGA):null,pot=mult?Math.round(_matchStake*mult):0;
    mb.appendChild($(`<div class="small center" style="margin-bottom:6px">${_betGF}\u2013${_betGA} pays <b class="gold">${mult?mult.toFixed(2):"\u2013"}x</b>${mult?` \u00B7 ${money(_matchStake)} returns <b class="gold">${money(pot)}</b>`:""}</div>`));
    const sr=$(`<div class="row" style="gap:6px;align-items:center"></div>`);
-   const stakeIn=$(`<input type="number" min="1000" max="${MATCH_BET_CAP}" step="50000" value="${_matchStake}" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit"/>`);
-   stakeIn.oninput=e=>{_matchStake=clamp(Math.round(+e.target.value||0),0,MATCH_BET_CAP);};
+   const stakeIn=$(`<input type="text" inputmode="numeric" value="${_matchStake.toLocaleString()}" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit"/>`);
+   stakeIn.oninput=e=>{_matchStake=clamp(parseInt(e.target.value.replace(/[^\d]/g,""))||0,0,MATCH_BET_CAP);};
+   stakeIn.onblur=e=>{e.target.value=_matchStake.toLocaleString();render();};
    const place=$(`<button class="btn sm">Place bet</button>`);place.onclick=()=>placeMatchBet(_betGF,_betGA,_matchStake);
    sr.appendChild(stakeIn);sr.appendChild(place);mb.appendChild(sr);
    mb.appendChild($(`<div class="small muted" style="margin-top:4px">Capped at ${money(MATCH_BET_CAP)} per match.</div>`));
@@ -3216,8 +3217,9 @@ function bettingCard(){
    fut.appendChild($(`<div class="small muted" style="margin-bottom:6px">Bet on how the season ends. Risk as much as you like \u2014 it settles at season\u2019s end.</div>`));
    const sr=$(`<div class="row" style="gap:6px;align-items:center;margin-bottom:8px"></div>`);
    sr.appendChild($(`<div class="small muted">Stake:</div>`));
-   const fin=$(`<input type="number" min="10000" step="500000" value="${_futStake}" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit"/>`);
-   fin.oninput=e=>{_futStake=Math.max(0,Math.round(+e.target.value||0));};
+   const fin=$(`<input type="text" inputmode="numeric" value="${_futStake.toLocaleString()}" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit"/>`);
+   fin.oninput=e=>{_futStake=Math.max(0,parseInt(e.target.value.replace(/[^\d]/g,""))||0);};
+   fin.onblur=e=>{e.target.value=_futStake.toLocaleString();};
    sr.appendChild(fin);fut.appendChild(sr);
    futuresMarkets().forEach(m=>{
      const already=(G.futuresBets||[]).some(b=>b.market===m.key&&b.season===G.season);
