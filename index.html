@@ -425,7 +425,10 @@ function ovrFromAge(pot,age){
  return clamp(pot*f,20,99);}
 function calcOvr(p){let o=0;for(const k in OVR_W[p.pos])o+=p[k]*OVR_W[p.pos][k];return Math.round(o);}
 function makeAttrs(p){
- const base=ovrFromAge(p.pot,p.age)-(TILT_BIAS[p.pos]||0),t=TILT[p.pos];
+ // Attributes are built from the player's EFFECTIVE ceiling, not his shown potential,
+ // so a bust's metrics stay in line with his (capped) OVR instead of reading 90s while
+ // the OVR sits at 57. For everyone else effPot === pot, so nothing changes.
+ const base=ovrFromAge(effPot(p),p.age)-(TILT_BIAS[p.pos]||0),t=TILT[p.pos];
  for(const a of attrsFor(p.pos))p[a]=clamp(Math.round(base+t[a]+rnd(-6,6)),18,99);
  setOvr(p);}
 function valueOf(p){
@@ -588,6 +591,10 @@ function hydrateLoadedG(){
  if(!G.gbLog)G.gbLog=[];
  if(!G.badges)G.badges={};
  if(!G.badgeStats)G.badgeStats={};
+ // Older busts were built with high (potential-based) metrics but a capped OVR, which
+ // read as inconsistent. Rebuild their attributes from the true ceiling so metrics and
+ // OVR agree. Only affects hidden busts; everyone else is untouched.
+ if(!G._bustAttrFix){G.players.forEach(p=>{if(p.bust)makeAttrs(p);});G._bustAttrFix=1;}
  if(!G.news)G.news=[];
  if(G.wcYearsLeft==null)G.wcYearsLeft=4;
  if(G.tippyYearsLeft==null){let ty=(G.wcYearsLeft||4)-2;if(ty<=0)ty+=4;G.tippyYearsLeft=ty;}
@@ -1105,8 +1112,7 @@ function bootRace(){
 function attendanceFactors(t,oppId,cupStage){
  // Base: reputation and ticket price, as before
  const rep=repOf(t);
- let demand=clamp(.42+rep*.45-(G.ticketPrice-25)*.012,.10,1);
- const f={base:demand,boot:0,goat:0,prestige:0,form:0,cup:0,stars:[],goatName:null};
+ const f={base:0,boot:0,goat:0,prestige:0,form:0,cup:0,stars:[],goatName:null};
  const opp=oppId!=null?T(oppId):null;
  // The GOAT: the single best attacker (MID or FWD) in the world is a bigger draw
  // than the Golden Boot race (whose boost caps at +18%). Fans pack in on either side.
@@ -1131,17 +1137,19 @@ function attendanceFactors(t,oppId,cupStage){
  if(rank>0)f.form=((PER_TIER/2)-rank)*.018;   // +7% top, -8% bottom
  // Cup knockouts: the later the round, the bigger the occasion
  if(cupStage!=null)f.cup=[.06,.12,.20,.30][Math.min(cupStage,3)]||0;
- const total0=clamp(demand+f.boot+f.goat+f.prestige+f.form+f.cup,.08,1);
- // Excess demand buys pricing power. rawAppeal ignores the current price: when a
- // fixture would sell out at face value (rawAppeal>1) \u2014 a GOAT on show, several
- // Golden Boots, two powerhouses, a cup final \u2014 fans tolerate a premium before the
- // ground thins. A dead rubber tops out near \u00A355; the match of the century, well
- // into the hundreds. Above that comfort price the crowd falls away to zero, so no
- // positive floor can be farmed at absurd prices (a \u00A31,000 ticket empties the ground).
- const rawAppeal=(.42+rep*.45)+f.boot+f.goat+f.prestige+f.form+f.cup;
- const comfort=55+clamp(rawAppeal-1,0,1)*130;   // \u00A355 (routine) \u2026 ~\u00A3185 (peak hype)
- f.comfort=comfort;
- f.total=(G.ticketPrice>comfort)?total0*clamp(1-(G.ticketPrice-comfort)/(comfort*1.2),0,1):total0;
+ // Pull is the fixture's price-independent appeal (reputation plus every occasion
+ // bonus). The CLEARING PRICE is the highest face value at which the ground still
+ // fills; it scales with pull, so a GOAT-on-show cup final clears far higher than a
+ // dead rubber. Charge at or below it and the appeal-limited crowd shows up; charge
+ // above it and seats empty across a band. The resale market prints this same number,
+ // so setting face value to the resale price now FILLS the ground instead of emptying
+ // it \u2014 real demand (a hot secondary market) genuinely supports a higher gate.
+ const pull=(.42+rep*.45)+f.boot+f.goat+f.prestige+f.form+f.cup;
+ const clearing=clamp(35+clamp(pull-0.7,0,1.4)*200,30,450);
+ const baseFill=clamp(pull,.12,1);
+ const over=Math.max(0,G.ticketPrice-clearing);
+ f.base=baseFill;f.comfort=clearing;
+ f.total=clamp(baseFill*clamp(1-over/(clearing*0.9),0,1),0,1);
  return f;
 }
 function attendance(t,oppId,cupStage){
@@ -1170,16 +1178,16 @@ function nextHomeFixture(){
  return league||cup;
 }
 function secondaryMarket(){
- // What the touts are asking. Face value clears at demand=0.62; when the
- // occasion pushes demand above that, resale climbs, and slack demand
- // drops resale below face. That spread is the pricing signal.
+ // The resale market prints the true clearing price for the next home fixture \u2014 the
+ // highest face value that still fills the ground. Surge is how far your face value
+ // sits below (positive: room to raise) or above (negative: overpriced) that price.
  const nx=nextHomeFixture();if(!nx)return null;
  const t=userTeamObj();
  const f=attendanceFactors(t,nx.opp,nx.cupStage);
- const heat=f.total/0.62;
- const resale=Math.max(5,Math.round(G.ticketPrice*heat));
+ const resale=Math.max(5,Math.round(f.comfort));
+ const surge=Math.round((f.comfort/Math.max(1,G.ticketPrice)-1)*100);
  return{opp:T(nx.opp)?T(nx.opp).name:"?",cup:nx.cupStage!=null,factors:f,
-   resale,heat,surge:Math.round((heat-1)*100)};
+   resale,heat:f.comfort/Math.max(1,G.ticketPrice),surge};
 }
 /* Richer, higher-prestige, higher-division AI clubs break ground on their own
    grounds and keep a cash buffer in reserve, so the mega tier is not user-only. */
@@ -1386,6 +1394,10 @@ const BADGES=[
  {id:"invincibles",name:"Invincibles",desc:"Go a full league season unbeaten"},
  {id:"three_peat",name:"Three-Peat",desc:"Win your division three seasons in a row",f:(t,x)=>x.leagueRun>=3},
  {id:"dynasty",name:"Dynasty",desc:"Win 5 league titles with the same club",f:(t)=>(t.leagueTitles||0)>=5},
+ {id:"streak_15",name:"Fifteen in a Row",desc:"Win 15 consecutive league titles",f:(t,x)=>x.leagueRun>=15},
+ {id:"streak_20",name:"Twenty in a Row",desc:"Win 20 consecutive league titles",f:(t,x)=>x.leagueRun>=20},
+ {id:"streak_50",name:"Half-Century Streak",desc:"Win 50 consecutive league titles",f:(t,x)=>x.leagueRun>=50},
+ {id:"streak_100",name:"Century Streak",desc:"Win 100 consecutive league titles",f:(t,x)=>x.leagueRun>=100},
  {id:"from_bottom",name:"From the Bottom",desc:"Start in tier 3 and become champions of tier 1"},
  // regional cup
  {id:"giant_killers",name:"Giant Killers",desc:"Eliminate a higher-tier club in the cup"},
@@ -1446,7 +1458,7 @@ const BADGES=[
  {id:"twelfth_man",name:"12th Man",desc:"Hire a supporters\u2019 coordinator and keep them 5 seasons"},
  {id:"full_suite",name:"Full Suite",desc:"Own max stadium + Gold facility + jet + supporters",f:(t,x)=>x.fullSuite},
  {id:"infra_dynasty",name:"Infrastructure Dynasty",desc:"Complete every stadium tier with the same club",f:(t,x)=>x.maxStadium},
- {id:"away_specialists",name:"Away Day Specialists",desc:"Win 10 away matches in a season with the jet active"},
+ {id:"away_specialists",name:"Away Day Specialists",desc:"Win 7 away league matches in a season with the jet active"},
  // coaches & staff
  {id:"first_coach",name:"First Appointment",desc:"Hire your first head coach"},
  {id:"loyal_servant",name:"Loyal Servant",desc:"Keep the same head coach for 5 seasons"},
@@ -1455,13 +1467,17 @@ const BADGES=[
  {id:"elite_mind",name:"Elite Mind",desc:"Win a major trophy with an Elite Coach"},
  {id:"youth_revolution",name:"Youth Revolution",desc:"Win a title with a Youth Developer coach"},
  {id:"full_backroom",name:"Full Backroom",desc:"Hire all four staff roles at 5-star at once",
-   f:(t)=>["gk","def","att","fit"].every(r=>G.myStaff&&G.myStaff[r]&&G.myStaff[r].stars>=5)},
+   f:(t)=>["fitness","physio","youth","commercial"].every(r=>G.myStaff&&G.myStaff[r]&&G.myStaff[r].stars>=5)},
  {id:"chief_scout",name:"Chief Scout",desc:"Hire the Chief Scout and sign a shortlist player"},
  {id:"contract_whisperer",name:"Contract Whisperer",desc:"Renew a coach who demanded a big raise"},
  {id:"retirement_watch",name:"Retirement Watch",desc:"Have a coach retire at 65 in your job"},
  // transfers
  {id:"window_warrior",name:"Window Warrior",desc:"Complete 5 transfers in a single window"},
  {id:"free_agent_king",name:"Free Agent King",desc:"Sign 10 free agents in one career"},
+ {id:"fa_50",name:"Free Agent Regular",desc:"Sign 50 free agents in one career",f:()=>((G.badgeStats||{}).faSigns||0)>=50},
+ {id:"fa_100",name:"Free Agent Fanatic",desc:"Sign 100 free agents in one career",f:()=>((G.badgeStats||{}).faSigns||0)>=100},
+ {id:"club_buys_50",name:"Wheeler Dealer",desc:"Buy 50 players from other clubs",f:()=>((G.badgeStats||{}).clubBuys||0)>=50},
+ {id:"club_buys_100",name:"Transfer Titan",desc:"Buy 100 players from other clubs",f:()=>((G.badgeStats||{}).clubBuys||0)>=100},
  {id:"cross_region",name:"Cross-Region Raid",desc:"Buy a player from a different region"},
  {id:"scout_network",name:"Scout Network",desc:"Scout 10 different clubs in one season"},
  {id:"zero_releases",name:"Zero Releases",desc:"Go 5 seasons without releasing a player"},
@@ -1471,6 +1487,7 @@ const BADGES=[
  {id:"global_elite",name:"Global Elite",desc:"Reach 80 prestige",f:(t)=>(t.prestige||0)>=80},
  {id:"universe_1",name:"Universe #1",desc:"Hold the #1 prestige ranking in the world",f:(t,x)=>x.rank1},
  {id:"century_club",name:"Century Club",desc:"Manage the same club for 100 seasons",f:()=>G.season>=100},
+ {id:"sim_100",name:"The Long Game",desc:"Reach season 100",f:()=>G.season>=100},
  {id:"phoenix",name:"Phoenix",desc:"Fall to tier 3 and climb back to Conrad champions"},
  {id:"next_man_up",name:"Next Man Up",desc:"Win the very next match after a first-team player is called away by an off-field crisis"},
  {id:"clean_books",name:"Clean Books",desc:"Never go into the red across a 10-season span"},
@@ -2089,7 +2106,7 @@ function endSeason(){
    if(bs.noRelease>=5)awardBadge("zero_releases");
    bs.cleanBooks=(!bs.wentRedThisSeason&&_ut.budget>=0)?(bs.cleanBooks||0)+1:0;bs.wentRedThisSeason=false;
    if(bs.cleanBooks>=10)awardBadge("clean_books");
-   if((bs.awayJetWins||0)>=10)awardBadge("away_specialists");
+   if((bs.awayJetWins||0)>=7)awardBadge("away_specialists");
    bs.awayJetWins=0;
    bs.scoutedIds={};
    if(_playedTier===2)bs.hitBottom=true;
@@ -2119,8 +2136,11 @@ function endSeason(){
  if(G.contLive&&G.contLive.finished){/* played round by round already */}
  else runContinentalCup(RT);
  delete G.contLive;
- if(G.lastCont&&G.lastCont.season===G.season&&G.lastCont.winnerId!=null&&T(G.lastCont.winnerId))
-   T(G.lastCont.winnerId).prestige=clamp((T(G.lastCont.winnerId).prestige||0)+15,0,PRESTIGE_MAX);
+ if(G.lastCont&&G.lastCont.season===G.season&&G.lastCont.winnerId!=null&&T(G.lastCont.winnerId)){
+   const w=T(G.lastCont.winnerId);
+   w.prestige=clamp((w.prestige||0)+22,0,PRESTIGE_MAX);   // the continental crown is the biggest prize
+   const fl=conradFloor(w);if(w.prestige<fl)w.prestige=fl;
+ }
  recordPrestigeSnapshot();
  G.wcYearsLeft=(G.wcYearsLeft||4)-1;
  if(G.wcYearsLeft<=0){runWorldCup();G.wcYearsLeft=4;}
@@ -2220,6 +2240,14 @@ function generateNarratives(RT,ureg,boot,promoted,relegated){
  if(G.news.length>60)G.news.length=60;
 }
 const PRESTIGE_MAX=100;
+function conradFloor(t){
+ // Recent Conrad Cups are the single strongest prestige signal. A reigning continental
+ // champion holds a high floor; back-to-back winners sit near the very top and cannot
+ // be eroded by seasonal decay.
+ if(!t)return 0;
+ const recent=(G.cups.continental||[]).filter(e=>e.winner===t.name&&e.region===t.region&&e.season>=G.season-3).length;
+ return recent>=2?92:recent>=1?82:0;
+}
 function updatePrestige(RT){
  // everything decays a little each season, so past glory fades without new results
  G.teams.forEach(t=>{t.prestige=Math.max(0,(t.prestige||0)*0.94);});
@@ -2239,6 +2267,8 @@ function updatePrestige(RT){
  // regional cup winner
  if(G.cup&&G.cup.winner!==null&&T(G.cup.winner))
    T(G.cup.winner).prestige=clamp((T(G.cup.winner).prestige||0)+6,0,PRESTIGE_MAX);
+ // recent continental champions hold their floor against decay
+ G.teams.forEach(t=>{const fl=conradFloor(t);if((t.prestige||0)<fl)t.prestige=fl;});
 }
 function globalPrestige(){return G.teams.slice().sort((a,b)=>(b.prestige||0)-(a.prestige||0));}
 function regionPrestige(rk){return G.teams.filter(t=>t.region===rk).sort((a,b)=>(b.prestige||0)-(a.prestige||0));}
@@ -2687,7 +2717,11 @@ function transferFee(p){
    if(seller.trait==="hoarder")mult*=1.65;      // will not be moved cheaply
    if(seller.trait==="youth"&&p.age<24)mult*=1.35;  // protects its prospects
  }
- return Math.max(500000,Math.round(base*mult/100000)*100000);
+ const fee=Math.max(500000,Math.round(base*mult/100000)*100000);
+ // The current universe GOAT is a franchise asset \u2014 he draws crowds and sells shirts,
+ // so no club lets him go cheaply. His fee never falls below \u00A3200M.
+ if(universeGoatId()===p.id)return Math.max(200000000,fee);
+ return fee;
 }
 function squadCapNotice(){
  // fired right after a signing lands: explains why the market is about to lock
@@ -2728,6 +2762,7 @@ function buyPlayer(p){
  p.team=t.id;t.squad.push(p.id);
  {const bs=G.badgeStats||(G.badgeStats={});
   bs.windowSigns=(bs.windowSigns||0)+1;if(bs.windowSigns>=5)awardBadge("window_warrior");
+  bs.clubBuys=(bs.clubBuys||0)+1;
   if(p.region!==t.region)awardBadge("cross_region");
   if(G.superScout&&(G.superShort||[]).includes(p.id))awardBadge("chief_scout");}
  G.window.offersMade++;
@@ -2771,10 +2806,10 @@ function facilityActive(t){return !!(t&&(t.facility||0)>0&&t.facilityMaint==="pa
    fixture (attendance falls as the price rises, so there is a revenue-maximising
    point). Restores G.ticketPrice before returning. */
 function optimalTicketPrice(t,oppId,cupStage){
- // The revenue optimum never exceeds a hype fixture's comfort price (~\u00A3185 at most),
- // so a scan to \u00A3300 covers every case with margin while staying cheap.
+ // The revenue optimum sits at the clearing price (up to ~\u00A3450 on the biggest nights),
+ // so scan the full manual range to catch every case.
  const save=G.ticketPrice;let best=save,bestRev=-1;
- for(let p=5;p<=300;p++){G.ticketPrice=p;const rev=attendance(t,oppId,cupStage)*p;
+ for(let p=5;p<=500;p++){G.ticketPrice=p;const rev=attendance(t,oppId,cupStage)*p;
    if(rev>bestRev){bestRev=rev;best=p;}}
  G.ticketPrice=save;return best;
 }
@@ -3672,9 +3707,9 @@ function viewOffice(w){
      if(f.cup>0)lines.push(`Cup occasion ${pct(f.cup)}`);
      if(lines.length)bo.appendChild($(`<div class="small muted">${lines.join(" \u00B7 ")}</div>`));
      bo.appendChild($(`<div class="small muted" style="margin-top:6px">${
-       mkt.surge>=15?"Touts are cashing in on this fixture. There is room to raise your price.":
-       mkt.surge<=-10?"Tickets are going below face value. A cheaper seat would fill more of the ground.":
-       "Resale is tracking face value. Your pricing is about right for this fixture."}</div>`));
+       mkt.surge>=15?`Fans would still fill the ground at about \u00A3${mkt.resale}. There is room to raise your price.`:
+       mkt.surge<=-10?`You are priced above what fills the ground. Around \u00A3${mkt.resale} would pack more in.`:
+       "Your price is about right for what this fixture will bear."}</div>`));
    }else{
      bo.appendChild($(`<div class="small muted">No home fixture scheduled. The box office reopens next season.</div>`));
    }
