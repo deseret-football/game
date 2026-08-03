@@ -525,7 +525,8 @@ function genWorld(ownerName){
     formation:"4-4-2",xi:null,tactics:{mentality:50,pressing:50,tempo:50,width:50,line:50},
     ticketPrice:20,finance:null,log:[],history:[],cup:null,results:[],
     cups:{regional:[],continental:[],world:[],tippy:[]},wcYearsLeft:4,tippyYearsLeft:2,
-    liaison:false,liaisonCycle:null,gbLog:[],badges:{},badgeStats:{},_clubIdx:clubIdx};
+    liaison:false,liaisonCycle:null,gbLog:[],badges:{},badgeStats:{},
+    matchBet:null,futuresBets:[],lastBootRace:{},_clubIdx:clubIdx};
  rebuildIndex();rebuildTierTeams();
  G.coachPool=genCoachPool();
 }
@@ -591,6 +592,9 @@ function hydrateLoadedG(){
  if(!G.gbLog)G.gbLog=[];
  if(!G.badges)G.badges={};
  if(!G.badgeStats)G.badgeStats={};
+ if(G.matchBet===undefined)G.matchBet=null;
+ if(!G.futuresBets)G.futuresBets=[];
+ if(!G.lastBootRace)G.lastBootRace={};
  // Older busts were built with high (potential-based) metrics but a capped OVR, which
  // read as inconsistent. Rebuild their attributes from the true ceiling so metrics and
  // OVR agree. Only affects hidden busts; everyone else is untouched.
@@ -1049,6 +1053,7 @@ function playMatchday(){
          G.results.push({md:G.matchday,opp:home?a:h,home,gf:home?hg:ag,ga:home?ag:hg});
          G.lastScorers={mine:home?hs:asc,theirs:home?asc:hs};
          const _gf=home?hg:ag,_ga=home?ag:hg;
+         settleMatchBet(_gf,_ga);
          if(!home&&_gf>_ga&&jetActive(userTeamObj())){G.badgeStats=G.badgeStats||{};G.badgeStats.awayJetWins=(G.badgeStats.awayJetWins||0)+1;}
          if(G.bombVictimPending){if(_gf>_ga)awardBadge("next_man_up");G.bombVictimPending=false;}}
        out.push({region:reg.key,tier,h,a,hg,ag});
@@ -1550,6 +1555,139 @@ function fiveYearBomb(){
  });
  if(dep.length>1)logAdd(`Around the league: ${dep.length-1} other club${dep.length-1===1?"":"s"} lost a first-team player to off-field matters.`);
  rebuildIndex();   // register the new 16-year-olds in the id->player map, or P() returns undefined and match prep spins forever
+}
+/* ================= Prediction market (betting) =================
+   A once-a-season futures book (each regional cup, the Conrad Cup, your region's
+   Golden Boot, and the World & Tippy Cups in the years they run) plus a correct-score
+   bet on each of your matches. Odds are honest \u2014 derived from real strength, so
+   favourites pay little and upsets pay huge \u2014 with a small house margin, so betting is
+   a flutter, never an income engine. Match stakes cap at \u00A32M; futures let you risk it
+   all. Exact scores can't be farmed (you can't reliably hit one), and futures only ever
+   pay for the RIGHT outcome, so there is nothing to throw. */
+const BOOK_MARGIN=0.07;
+const MATCH_BET_CAP=2000000;
+let _betGF=1,_betGA=1,_matchStake=100000,_futStake=1000000;   // transient UI state
+function _fact(n){let f=1;for(let i=2;i<=n;i++)f*=i;return f;}
+function poissonPmf(k,l){return Math.exp(-l)*Math.pow(l,k)/_fact(k);}
+function decOdds(p,cap){return clamp((1-BOOK_MARGIN)/Math.max(p,1e-6),1.05,cap||40);}
+function clubBetRating(t){if(!t)return 50;const s=squadOf(t).filter(Boolean).sort((a,b)=>b.ovr-a.ovr).slice(0,11);
+ return s.length?s.reduce((a,p)=>a+p.ovr,0)/s.length:50;}
+function fieldProbs(items,temp){   // softmax; higher temp = flatter = more upsets
+ const mx=Math.max(...items.map(i=>i.rating));
+ const ex=items.map(i=>Math.exp((i.rating-mx)/temp));
+ const tot=ex.reduce((a,b)=>a+b,0)||1;
+ return items.map((i,k)=>({...i,p:ex[k]/tot}));
+}
+/* ---- correct-score match bets ---- */
+function nextUserMatch(){
+ if(G.matchday>=SEASON_LEN)return null;
+ const t=userTeamObj(),tt=tierClubs(t.region,t.tier),li=tt.indexOf(G.userTeam);
+ const fx=G.fixtures[G.matchday];if(!fx)return null;
+ for(const[i,j]of fx){if(i===li)return{opp:tt[j],home:true};if(j===li)return{opp:tt[i],home:false};}
+ return null;
+}
+function matchXG(){
+ const nx=nextUserMatch();if(!nx)return null;
+ const u=G.userTeam,o=nx.opp;
+ const uS=strength(teamXI(u)),oS=strength(teamXI(o));
+ if(nx.home){const[lh,la]=xgPair(uS,oS,teamTac(u),teamTac(o),teamBoost(u,true),teamBoost(o,false),3);return{lu:lh,lo:la,nx};}
+ const[lh,la]=xgPair(oS,uS,teamTac(o),teamTac(u),teamBoost(o,true),teamBoost(u,false),3);
+ return{lu:la,lo:lh,nx};
+}
+function scoreMultFrom(xg,gf,ga){return decOdds(poissonPmf(gf,xg.lu)*poissonPmf(ga,xg.lo),200);}
+function placeMatchBet(gf,ga,stake){
+ const t=userTeamObj();
+ if(G.matchBet)return toast("You already have a bet on this match.");
+ const xg=matchXG();if(!xg)return toast("No upcoming match to bet on.");
+ stake=Math.round(stake);
+ if(!(stake>0))return toast("Enter a stake first.");
+ if(stake>MATCH_BET_CAP)return toast(`Match bets are capped at ${money(MATCH_BET_CAP)}.`);
+ if(t.budget<stake)return toast("You can't stake more than your budget.");
+ const mult=Math.round(scoreMultFrom(xg,gf,ga)*100)/100;
+ t.budget-=stake;G.matchBet={gf,ga,stake,mult};
+ logAdd(`Bet ${money(stake)} on a ${gf}\u2013${ga} scoreline (pays ${mult.toFixed(2)}x).`,-stake);
+ saveGame(true);render();
+}
+function settleMatchBet(gf,ga){
+ if(!G.matchBet)return;const b=G.matchBet;G.matchBet=null;
+ if(b.gf===gf&&b.ga===ga){const win=Math.round(b.stake*b.mult);userTeamObj().budget+=win;
+   logAdd(`\uD83C\uDFAF Correct score ${gf}\u2013${ga}! Your bet won ${money(win)}.`,win);
+   try{toast(`\uD83C\uDFAF Correct score \u2014 you won ${money(win)}!`);}catch(e){}}
+ else logAdd(`Score bet lost \u2014 you called ${b.gf}\u2013${b.ga}, it finished ${gf}\u2013${ga}.`);
+}
+/* ---- preseason futures ---- */
+function futuresMarkets(){
+ const out=[],ureg=userRegionKey();
+ REGIONS.forEach(r=>{
+   const clubs=G.teams.filter(t=>t.region===r.key).map(t=>({id:t.id,name:t.name,rating:clubBetRating(t)}))
+     .sort((a,b)=>b.rating-a.rating).slice(0,12);
+   const probs=fieldProbs(clubs,3.4);
+   out.push({key:"regcup_"+r.key,title:`${regionOf(r.key).name} Cup winner`,kind:"team",
+     outcomes:probs.map(o=>({id:o.id,name:o.name,mult:Math.round(decOdds(o.p,40)*100)/100}))});
+ });
+ {const clubs=G.teams.map(t=>({id:t.id,name:t.name,rating:clubBetRating(t)}))
+    .sort((a,b)=>b.rating-a.rating).slice(0,14);
+  const probs=fieldProbs(clubs,3.1);
+  out.push({key:"conrad",title:`${CONT_CUP.replace("The ","")} winner`,kind:"team",
+    outcomes:probs.map(o=>({id:o.id,name:o.name,mult:Math.round(decOdds(o.p,40)*100)/100}))});}
+ {const ids=(G.lastBootRace&&G.lastBootRace[ureg])||[];
+  const players=ids.map(P).filter(p=>p&&p.team!=null)
+    .map(p=>({id:p.id,name:p.name,rating:(p.shooting||50)+(p.technique||50)*.4}));
+  if(players.length>=2){const probs=fieldProbs(players,9);
+    out.push({key:"boot",title:`${regionOf(ureg).name} Golden Boot`,kind:"player",
+      outcomes:probs.map(o=>({id:o.id,name:o.name,mult:Math.round(decOdds(o.p,25)*100)/100}))});}}
+ if((G.wcYearsLeft||99)===1){
+   const nats=COUNTRIES.map(natStrength).filter(Boolean).sort((a,b)=>b.rating-a.rating).slice(0,16)
+     .map(n=>({name:n.country,rating:n.rating}));
+   if(nats.length>=2){const probs=fieldProbs(nats,2.5);
+     out.push({key:"worldcup",title:"World Cup winner",kind:"name",
+       outcomes:probs.map(o=>({name:o.name,mult:Math.round(decOdds(o.p,40)*100)/100}))});}
+ }
+ if((G.tippyYearsLeft==null?99:G.tippyYearsLeft)===1){
+   const areas=TIPPY_AREAS.map(continentSquad).filter(Boolean).map(a=>({name:a.country,rating:a.rating}));
+   if(areas.length>=2){const probs=fieldProbs(areas,2.7);
+     out.push({key:"tippy",title:"Tippy Cup winner",kind:"name",
+       outcomes:probs.map(o=>({name:o.name,mult:Math.round(decOdds(o.p,20)*100)/100}))});}
+ }
+ return out;
+}
+function placeFuture(marketKey,kind,pick,pickName,title,mult,stake){
+ const t=userTeamObj();
+ if(!inWindow())return toast("Futures are open only during the transfer window.");
+ stake=Math.round(stake);
+ if(!(stake>0))return toast("Enter a stake first.");
+ if(t.budget<stake)return toast("You can't stake more than your budget.");
+ G.futuresBets=G.futuresBets||[];
+ if(G.futuresBets.some(b=>b.market===marketKey&&b.season===G.season))
+   return toast("You already have a bet in this market this season.");
+ t.budget-=stake;
+ G.futuresBets.push({market:marketKey,kind,pick,label:`${pickName} \u2014 ${title}`,mult,stake,season:G.season});
+ logAdd(`Futures bet: ${money(stake)} on ${pickName} (${title}) at ${mult.toFixed(2)}x.`,-stake);
+ saveGame(true);render();
+}
+function settleFutures(){
+ if(!G.futuresBets||!G.futuresBets.length)return;
+ const ureg=userRegionKey(),keep=[];let net=0,any=false;
+ const regWinner=r=>{const e=(G.cups.regional||[]).find(x=>x.season===G.season&&x.region===r);return e?e.winner:null;};
+ const conradWinner=(()=>{const e=(G.cups.continental||[]).find(x=>x.season===G.season);return e?e.winner:null;})();
+ const bootId=(()=>{const b=(G._bootWinners||[]).find(x=>x.region===ureg);return b?b.id:null;})();
+ const wcWinner=(()=>{const e=(G.cups.world||[]).find(x=>x.season===G.season);return e?e.champion:null;})();
+ const tippyWinner=(()=>{const e=(G.cups.tippy||[]).find(x=>x.season===G.season);return e?e.champion:null;})();
+ G.futuresBets.forEach(b=>{
+   if(b.season!==G.season){keep.push(b);return;}
+   let won=false;
+   if(b.market.indexOf("regcup_")===0){const w=regWinner(b.market.slice(7));won=!!w&&!!T(b.pick)&&T(b.pick).name===w;}
+   else if(b.market==="conrad"){won=!!conradWinner&&!!T(b.pick)&&T(b.pick).name===conradWinner;}
+   else if(b.market==="boot"){won=bootId!=null&&b.pick===bootId;}
+   else if(b.market==="worldcup"){won=!!wcWinner&&b.pick===wcWinner;}
+   else if(b.market==="tippy"){won=!!tippyWinner&&b.pick===tippyWinner;}
+   any=true;
+   if(won){const pay=Math.round(b.stake*b.mult);userTeamObj().budget+=pay;net+=pay;
+     logAdd(`\uD83C\uDFC7 Futures WON: ${b.label} \u2014 ${money(pay)}.`,pay);}
+   else logAdd(`Futures lost: ${b.label}.`);
+ });
+ G.futuresBets=keep;
+ if(any)try{toast(net>0?`\uD83C\uDFC7 Futures settled: +${money(net)}`:"Futures settled \u2014 no winners this year.");}catch(e){}
 }
 function aiStadiumTick(){
  G.teams.forEach(t=>{
@@ -2111,6 +2249,11 @@ function endSeason(){
    bs.scoutedIds={};
    if(_playedTier===2)bs.hitBottom=true;
  }}
+ // last season's top scorers per region drive next window's Golden Boot futures shortlist
+ G.lastBootRace={};
+ REGIONS.forEach(r=>{G.lastBootRace[r.key]=G.players
+   .filter(p=>p.team!=null&&T(p.team)&&T(p.team).region===r.key&&(p.gs||0)>0)
+   .sort((a,b)=>(b.gs||0)-(a.gs||0)).slice(0,8).map(p=>p.id);});
  generateNarratives(RT,ureg,boot,promoted,relegated);
  boardForcedSales();
  sellingClubSales();
@@ -2146,6 +2289,7 @@ function endSeason(){
  if(G.wcYearsLeft<=0){runWorldCup();G.wcYearsLeft=4;}
  G.tippyYearsLeft=(G.tippyYearsLeft==null?2:G.tippyYearsLeft)-1;
  if(G.tippyYearsLeft<=0){runTippyCup();G.tippyYearsLeft=4;}
+ settleFutures();
  ageAndRenew();
  coachSeasonTick();
  G.teams.forEach(t=>t.st=blankStd());
@@ -3022,6 +3166,84 @@ function renderStart(){
 }
 
 /* ---------- CLUB ---------- */
+function bettingCard(){
+ const card=$(`<details class="card" style="padding:10px"></details>`);
+ card.appendChild($(`<summary style="cursor:pointer;font-weight:700;font-size:15px">\uD83C\uDFB2 Prediction market</summary>`));
+ const t=userTeamObj();
+ // correct-score match bet
+ const nx=nextUserMatch();
+ const mb=$(`<div style="margin-top:8px"></div>`);
+ mb.appendChild($(`<div class="small" style="font-weight:700;margin-bottom:4px">Correct score \u00B7 next match</div>`));
+ if(!nx){mb.appendChild($(`<div class="small muted">No upcoming league match to bet on.</div>`));}
+ else if(G.matchBet){
+   const pot=Math.round(G.matchBet.stake*G.matchBet.mult);
+   mb.appendChild($(`<div class="small">Bet placed: <b class="gold">${G.matchBet.gf}\u2013${G.matchBet.ga}</b> for ${money(G.matchBet.stake)} \u00B7 pays <b class="gold">${money(pot)}</b> if exact. Settles when you play the match.</div>`));
+ }else{
+   const xg=matchXG(),oppName=T(nx.opp)?T(nx.opp).name:"?";
+   mb.appendChild($(`<div class="small muted" style="margin-bottom:6px">vs ${oppName} \u00B7 ${nx.home?"Home":"Away"} \u2014 call the exact final score. Long odds, small stakes, big thrill.</div>`));
+   const row=$(`<div class="row" style="gap:12px;align-items:center;justify-content:center;margin-bottom:6px"></div>`);
+   const stepper=(get,set,label)=>{
+     const box=$(`<div style="text-align:center"></div>`);
+     box.appendChild($(`<div class="lbl small muted">${label}</div>`));
+     const r=$(`<div class="row" style="gap:6px;align-items:center;justify-content:center"></div>`);
+     const dn=$(`<button class="btn sm sec" style="min-width:36px">\u2212</button>`);
+     const val=$(`<div style="font-weight:800;font-size:20px;min-width:22px;text-align:center">${get()}</div>`);
+     const up=$(`<button class="btn sm sec" style="min-width:36px">+</button>`);
+     dn.onclick=()=>{set(clamp(get()-1,0,9));render();};
+     up.onclick=()=>{set(clamp(get()+1,0,9));render();};
+     r.appendChild(dn);r.appendChild(val);r.appendChild(up);box.appendChild(r);return box;
+   };
+   row.appendChild(stepper(()=>_betGF,v=>_betGF=v,"You"));
+   row.appendChild($(`<div style="font-weight:800;font-size:20px;margin-top:14px">\u2013</div>`));
+   row.appendChild(stepper(()=>_betGA,v=>_betGA=v,"Them"));
+   mb.appendChild(row);
+   const mult=xg?scoreMultFrom(xg,_betGF,_betGA):null,pot=mult?Math.round(_matchStake*mult):0;
+   mb.appendChild($(`<div class="small center" style="margin-bottom:6px">${_betGF}\u2013${_betGA} pays <b class="gold">${mult?mult.toFixed(2):"\u2013"}x</b>${mult?` \u00B7 ${money(_matchStake)} returns <b class="gold">${money(pot)}</b>`:""}</div>`));
+   const sr=$(`<div class="row" style="gap:6px;align-items:center"></div>`);
+   const stakeIn=$(`<input type="number" min="1000" max="${MATCH_BET_CAP}" step="50000" value="${_matchStake}" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit"/>`);
+   stakeIn.oninput=e=>{_matchStake=clamp(Math.round(+e.target.value||0),0,MATCH_BET_CAP);};
+   const place=$(`<button class="btn sm">Place bet</button>`);place.onclick=()=>placeMatchBet(_betGF,_betGA,_matchStake);
+   sr.appendChild(stakeIn);sr.appendChild(place);mb.appendChild(sr);
+   mb.appendChild($(`<div class="small muted" style="margin-top:4px">Capped at ${money(MATCH_BET_CAP)} per match.</div>`));
+ }
+ card.appendChild(mb);
+ // preseason futures
+ const fut=$(`<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px"></div>`);
+ fut.appendChild($(`<div class="small" style="font-weight:700;margin-bottom:4px">Preseason futures</div>`));
+ if(!inWindow()){
+   fut.appendChild($(`<div class="small muted">Futures open during the transfer window.</div>`));
+ }else{
+   fut.appendChild($(`<div class="small muted" style="margin-bottom:6px">Bet on how the season ends. Risk as much as you like \u2014 it settles at season\u2019s end.</div>`));
+   const sr=$(`<div class="row" style="gap:6px;align-items:center;margin-bottom:8px"></div>`);
+   sr.appendChild($(`<div class="small muted">Stake:</div>`));
+   const fin=$(`<input type="number" min="10000" step="500000" value="${_futStake}" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit"/>`);
+   fin.oninput=e=>{_futStake=Math.max(0,Math.round(+e.target.value||0));};
+   sr.appendChild(fin);fut.appendChild(sr);
+   futuresMarkets().forEach(m=>{
+     const already=(G.futuresBets||[]).some(b=>b.market===m.key&&b.season===G.season);
+     const d=$(`<details class="card" style="padding:8px;margin-bottom:6px"></details>`);
+     d.appendChild($(`<summary style="cursor:pointer;font-weight:600;font-size:13px">${m.title}${already?' <span class="pill">bet placed</span>':''}</summary>`));
+     if(!already){
+       const list=$(`<div style="margin-top:6px"></div>`);
+       m.outcomes.forEach(o=>{
+         const orow=$(`<div class="row" style="gap:6px;align-items:center;margin-bottom:4px"><div class="small" style="flex:1">${o.name}</div><div class="small gold" style="min-width:52px;text-align:right">${o.mult.toFixed(2)}x</div></div>`);
+         const bet=$(`<button class="btn sm sec">Bet</button>`);
+         bet.onclick=()=>placeFuture(m.key,m.kind,m.kind==="name"?o.name:o.id,o.name,m.title,o.mult,_futStake);
+         orow.appendChild(bet);list.appendChild(orow);
+       });
+       d.appendChild(list);
+     }
+     fut.appendChild(d);
+   });
+ }
+ const open=(G.futuresBets||[]).filter(b=>b.season===G.season);
+ if(open.length){
+   fut.appendChild($(`<div class="small" style="font-weight:700;margin:8px 0 4px">Open futures</div>`));
+   open.forEach(b=>fut.appendChild($(`<div class="small muted">${b.label} \u00B7 ${money(b.stake)} at ${b.mult.toFixed(2)}x \u2192 ${money(Math.round(b.stake*b.mult))}</div>`)));
+ }
+ card.appendChild(fut);
+ return card;
+}
 function badgeCabinetCard(){
  const got=G.badges||{},n=Object.keys(got).length;
  const card=$(`<details class="card" style="padding:10px"></details>`);
@@ -3859,6 +4081,9 @@ function viewOffice(w){
     const fb=$(`<button class="btn sm sec" style="margin-top:8px">Release liaison</button>`);fb.onclick=fireLiaison;sp.appendChild(fb);
   }
   w.appendChild(sp);}
+
+ // ---- Prediction market (betting) ----
+ w.appendChild(bettingCard());
 
  // ---- Badge cabinet (collapsed by default) ----
  w.appendChild(badgeCabinetCard());
