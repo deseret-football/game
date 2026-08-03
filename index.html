@@ -1566,7 +1566,7 @@ function fiveYearBomb(){
    pay for the RIGHT outcome, so there is nothing to throw. */
 const BOOK_MARGIN=0.07;
 const MATCH_BET_CAP=2000000;
-let _betGF=1,_betGA=1,_matchStake=100000,_futStake=1000000;   // transient UI state
+let _betGF=1,_betGA=1,_matchStake=100000,_futStake=1000000,_betOpen=false;   // transient UI state
 function _fact(n){let f=1;for(let i=2;i<=n;i++)f*=i;return f;}
 function poissonPmf(k,l){return Math.exp(-l)*Math.pow(l,k)/_fact(k);}
 function decOdds(p,cap){return clamp((1-BOOK_MARGIN)/Math.max(p,1e-6),1.05,cap||40);}
@@ -3167,7 +3167,8 @@ function renderStart(){
 
 /* ---------- CLUB ---------- */
 function bettingCard(){
- const card=$(`<details class="card" style="padding:10px"></details>`);
+ const card=$(`<details class="card" style="padding:10px"${_betOpen?" open":""}></details>`);
+ card.addEventListener("toggle",()=>{_betOpen=card.open;});
  card.appendChild($(`<summary style="cursor:pointer;font-weight:700;font-size:15px">\uD83C\uDFB2 Prediction market</summary>`));
  const t=userTeamObj();
  // correct-score match bet
@@ -3182,27 +3183,37 @@ function bettingCard(){
    const xg=matchXG(),oppName=T(nx.opp)?T(nx.opp).name:"?";
    mb.appendChild($(`<div class="small muted" style="margin-bottom:6px">vs ${oppName} \u00B7 ${nx.home?"Home":"Away"} \u2014 call the exact final score. Long odds, small stakes, big thrill.</div>`));
    const row=$(`<div class="row" style="gap:12px;align-items:center;justify-content:center;margin-bottom:6px"></div>`);
-   const stepper=(get,set,label)=>{
+   const valGF=$(`<div style="font-weight:800;font-size:20px;min-width:22px;text-align:center">${_betGF}</div>`);
+   const valGA=$(`<div style="font-weight:800;font-size:20px;min-width:22px;text-align:center">${_betGA}</div>`);
+   const oddsLine=$(`<div class="small center" style="margin-bottom:6px"></div>`);
+   const refresh=()=>{
+     valGF.textContent=_betGF;valGA.textContent=_betGA;
+     const mult=xg?scoreMultFrom(xg,_betGF,_betGA):null,pot=mult?Math.round(_matchStake*mult):0;
+     oddsLine.innerHTML=`${_betGF}\u2013${_betGA} pays <b class="gold">${mult?mult.toFixed(2):"\u2013"}x</b>${mult?` \u00B7 ${money(_matchStake)} returns <b class="gold">${money(pot)}</b>`:""}`;
+   };
+   const stepper=(get,set,valNode)=>{
      const box=$(`<div style="text-align:center"></div>`);
-     box.appendChild($(`<div class="lbl small muted">${label}</div>`));
      const r=$(`<div class="row" style="gap:6px;align-items:center;justify-content:center"></div>`);
      const dn=$(`<button class="btn sm sec" style="min-width:36px">\u2212</button>`);
-     const val=$(`<div style="font-weight:800;font-size:20px;min-width:22px;text-align:center">${get()}</div>`);
      const up=$(`<button class="btn sm sec" style="min-width:36px">+</button>`);
-     dn.onclick=()=>{set(clamp(get()-1,0,9));render();};
-     up.onclick=()=>{set(clamp(get()+1,0,9));render();};
-     r.appendChild(dn);r.appendChild(val);r.appendChild(up);box.appendChild(r);return box;
+     // update in place \u2014 no full re-render, so the panel never collapses
+     dn.onclick=e=>{e.preventDefault();set(clamp(get()-1,0,9));refresh();};
+     up.onclick=e=>{e.preventDefault();set(clamp(get()+1,0,9));refresh();};
+     r.appendChild(dn);r.appendChild(valNode);r.appendChild(up);box.appendChild(r);return box;
    };
-   row.appendChild(stepper(()=>_betGF,v=>_betGF=v,"You"));
+   const bYou=$(`<div style="text-align:center"><div class="lbl small muted">You</div></div>`);
+   bYou.appendChild(stepper(()=>_betGF,v=>_betGF=v,valGF));
+   const bThem=$(`<div style="text-align:center"><div class="lbl small muted">Them</div></div>`);
+   bThem.appendChild(stepper(()=>_betGA,v=>_betGA=v,valGA));
+   row.appendChild(bYou);
    row.appendChild($(`<div style="font-weight:800;font-size:20px;margin-top:14px">\u2013</div>`));
-   row.appendChild(stepper(()=>_betGA,v=>_betGA=v,"Them"));
+   row.appendChild(bThem);
    mb.appendChild(row);
-   const mult=xg?scoreMultFrom(xg,_betGF,_betGA):null,pot=mult?Math.round(_matchStake*mult):0;
-   mb.appendChild($(`<div class="small center" style="margin-bottom:6px">${_betGF}\u2013${_betGA} pays <b class="gold">${mult?mult.toFixed(2):"\u2013"}x</b>${mult?` \u00B7 ${money(_matchStake)} returns <b class="gold">${money(pot)}</b>`:""}</div>`));
+   mb.appendChild(oddsLine);refresh();
    const sr=$(`<div class="row" style="gap:6px;align-items:center"></div>`);
    const stakeIn=$(`<input type="text" inputmode="numeric" value="${_matchStake.toLocaleString()}" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit"/>`);
-   stakeIn.oninput=e=>{_matchStake=clamp(parseInt(e.target.value.replace(/[^\d]/g,""))||0,0,MATCH_BET_CAP);};
-   stakeIn.onblur=e=>{e.target.value=_matchStake.toLocaleString();render();};
+   stakeIn.oninput=e=>{_matchStake=clamp(parseInt(e.target.value.replace(/[^\d]/g,""))||0,0,MATCH_BET_CAP);refresh();};
+   stakeIn.onblur=e=>{e.target.value=_matchStake.toLocaleString();};
    const place=$(`<button class="btn sm">Place bet</button>`);place.onclick=()=>placeMatchBet(_betGF,_betGA,_matchStake);
    sr.appendChild(stakeIn);sr.appendChild(place);mb.appendChild(sr);
    mb.appendChild($(`<div class="small muted" style="margin-top:4px">Capped at ${money(MATCH_BET_CAP)} per match.</div>`));
