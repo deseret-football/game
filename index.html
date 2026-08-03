@@ -526,7 +526,7 @@ function genWorld(ownerName){
     ticketPrice:20,finance:null,log:[],history:[],cup:null,results:[],
     cups:{regional:[],continental:[],world:[],tippy:[]},wcYearsLeft:4,tippyYearsLeft:2,
     liaison:false,liaisonCycle:null,gbLog:[],badges:{},badgeStats:{},
-    matchBet:null,futuresBets:[],lastBootRace:{},_clubIdx:clubIdx};
+    matchBet:null,futuresBets:[],lastBootRace:{},betLog:[],_clubIdx:clubIdx};
  rebuildIndex();rebuildTierTeams();
  G.coachPool=genCoachPool();
 }
@@ -595,6 +595,7 @@ function hydrateLoadedG(){
  if(G.matchBet===undefined)G.matchBet=null;
  if(!G.futuresBets)G.futuresBets=[];
  if(!G.lastBootRace)G.lastBootRace={};
+ if(!G.betLog)G.betLog=[];
  // Older busts were built with high (potential-based) metrics but a capped OVR, which
  // read as inconsistent. Rebuild their attributes from the true ceiling so metrics and
  // OVR agree. Only affects hidden busts; everyone else is untouched.
@@ -1604,15 +1605,19 @@ function placeMatchBet(gf,ga,stake){
  if(stake>MATCH_BET_CAP)return toast(`Match bets are capped at ${money(MATCH_BET_CAP)}.`);
  if(t.budget<stake)return toast("You can't stake more than your budget.");
  const mult=Math.round(scoreMultFrom(xg,gf,ga)*100)/100;
- t.budget-=stake;G.matchBet={gf,ga,stake,mult};
+ const oppName=T(xg.nx.opp)?T(xg.nx.opp).name:"?";
+ t.budget-=stake;G.matchBet={gf,ga,stake,mult,opp:oppName,home:xg.nx.home};
  logAdd(`Bet ${money(stake)} on a ${gf}\u2013${ga} scoreline (pays ${mult.toFixed(2)}x).`,-stake);
  saveGame(true);render();
 }
+function logBet(e){G.betLog=G.betLog||[];G.betLog.unshift(e);if(G.betLog.length>60)G.betLog.length=60;}
 function settleMatchBet(gf,ga){
  if(!G.matchBet)return;const b=G.matchBet;G.matchBet=null;
- if(b.gf===gf&&b.ga===ga){const win=Math.round(b.stake*b.mult);userTeamObj().budget+=win;
-   logAdd(`\uD83C\uDFAF Correct score ${gf}\u2013${ga}! Your bet won ${money(win)}.`,win);
-   try{toast(`\uD83C\uDFAF Correct score \u2014 you won ${money(win)}!`);}catch(e){}}
+ const won=(b.gf===gf&&b.ga===ga),payout=won?Math.round(b.stake*b.mult):0;
+ logBet({kind:"match",s:G.season,desc:`${b.gf}\u2013${b.ga} vs ${b.opp||"?"}`,actual:`${gf}\u2013${ga}`,stake:b.stake,mult:b.mult,won,payout});
+ if(won){userTeamObj().budget+=payout;
+   logAdd(`\uD83C\uDFAF Correct score ${gf}\u2013${ga}! Your bet won ${money(payout)}.`,payout);
+   try{toast(`\uD83C\uDFAF Correct score \u2014 you won ${money(payout)}!`);}catch(e){}}
  else logAdd(`Score bet lost \u2014 you called ${b.gf}\u2013${b.ga}, it finished ${gf}\u2013${ga}.`);
 }
 /* ---- preseason futures ---- */
@@ -1682,8 +1687,10 @@ function settleFutures(){
    else if(b.market==="worldcup"){won=!!wcWinner&&b.pick===wcWinner;}
    else if(b.market==="tippy"){won=!!tippyWinner&&b.pick===tippyWinner;}
    any=true;
-   if(won){const pay=Math.round(b.stake*b.mult);userTeamObj().budget+=pay;net+=pay;
-     logAdd(`\uD83C\uDFC7 Futures WON: ${b.label} \u2014 ${money(pay)}.`,pay);}
+   const payout=won?Math.round(b.stake*b.mult):0;
+   logBet({kind:"future",s:G.season,desc:b.label,stake:b.stake,mult:b.mult,won,payout});
+   if(won){userTeamObj().budget+=payout;net+=payout;
+     logAdd(`\uD83C\uDFC7 Futures WON: ${b.label} \u2014 ${money(payout)}.`,payout);}
    else logAdd(`Futures lost: ${b.label}.`);
  });
  G.futuresBets=keep;
@@ -3255,6 +3262,27 @@ function bettingCard(){
    open.forEach(b=>fut.appendChild($(`<div class="small muted">${b.label} \u00B7 ${money(b.stake)} at ${b.mult.toFixed(2)}x \u2192 ${money(Math.round(b.stake*b.mult))}</div>`)));
  }
  card.appendChild(fut);
+ // bet history (settled bets) with a running profit/loss
+ {const log=G.betLog||[];
+  const hist=$(`<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px"></div>`);
+  if(!log.length){
+    hist.appendChild($(`<div class="small muted">No settled bets yet. Winnings and losses will show here.</div>`));
+  }else{
+    const net=log.reduce((a,e)=>a+(e.payout||0)-(e.stake||0),0);
+    const wins=log.filter(e=>e.won).length;
+    const d=$(`<details style="padding:0"></details>`);
+    d.appendChild($(`<summary style="cursor:pointer;font-weight:700;font-size:13px">Bet history \u00B7 <span class="${net>=0?'res-w':'res-l'}">${net>=0?"+":""}${money(net)}</span> \u00B7 ${wins}/${log.length} won</summary>`));
+    const list=$(`<div style="margin-top:6px"></div>`);
+    log.slice(0,25).forEach(e=>{
+      const line=e.kind==="match"
+        ? `S${e.s} \u00B7 called ${e.desc} \u2192 ${e.actual}`
+        : `S${e.s} \u00B7 ${e.desc}`;
+      const res=e.won?`<span class="res-w">+${money(e.payout-e.stake)}</span>`:`<span class="res-l">\u2212${money(e.stake)}</span>`;
+      list.appendChild($(`<div class="row small" style="gap:6px;margin-bottom:3px"><div class="muted" style="flex:1">${line}</div><div style="min-width:70px;text-align:right">${res}</div></div>`));
+    });
+    d.appendChild(list);hist.appendChild(d);
+  }
+  card.appendChild(hist);}
  return card;
 }
 function badgeCabinetCard(){
